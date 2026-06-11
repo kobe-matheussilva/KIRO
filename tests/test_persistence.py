@@ -44,7 +44,8 @@ def test_save_article_markdown(tmp_path: Path):
     content = path.read_text()
     assert "Como resolver login" in content
     assert "fazer X" in content
-    assert "Problema" in content
+    # Novo header externo (substituiu "Problema") — V1.0.1
+    assert "Sobre este artigo" in content
 
 
 def test_save_report(tmp_path: Path):

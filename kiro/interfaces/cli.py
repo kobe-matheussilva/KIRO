@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from kiro.application.clustering.heuristic import HeuristicClusteringStrategy
 from kiro.application.generation.factory import build_llm_provider
-from kiro.application.pipeline import STAGES, Pipeline, PipelineRequest
+from kiro.application.pipeline import OUTPUT_STYLES, STAGES, Pipeline, PipelineRequest
 from kiro.config.settings import Settings
 from kiro.domain.exceptions import ConfigError
 from kiro.infrastructure.confluence_client import ConfluenceClient
@@ -64,9 +64,40 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Mostra logs detalhados em vez do spinner amigável.",
     )
+    run_p.add_argument(
+        "--style",
+        choices=OUTPUT_STYLES,
+        default=None,
+        help="Estilo dos artigos gerados. Se omitido, KIRO pergunta interativamente.",
+    )
 
     sub.add_parser("config-check", help="Valida configuração e encerra.")
     return parser
+
+
+def _ask_style_interactively() -> str:
+    """Prompt simples no terminal pra escolher entre Artigo ou FAQ.
+
+    Default = Artigo (texto corrido, mais próximo do padrão Confluence Kobe).
+    """
+    print()
+    print("  ╭─────────────────────────────────────────────────────╮")
+    print("  │  Em qual estilo gerar os artigos desta rodada?      │")
+    print("  ├─────────────────────────────────────────────────────┤")
+    print("  │   1) Artigo  — texto corrido (Sobre/Quando/Como)    │")
+    print("  │   2) FAQ     — perguntas e respostas self-service   │")
+    print("  ╰─────────────────────────────────────────────────────╯")
+    while True:
+        try:
+            choice = input("   Escolha [1]: ").strip() or "1"
+        except (EOFError, KeyboardInterrupt):
+            print("\n   (sem entrada — usando default: Artigo)")
+            return "artigo"
+        if choice in ("1", "artigo", "a"):
+            return "artigo"
+        if choice in ("2", "faq", "f"):
+            return "faq"
+        print("   Opção inválida — digite 1 ou 2.")
 
 
 def _stages_for(stage: str) -> tuple[str, ...]:
@@ -208,15 +239,19 @@ def main(argv: Optional[list[str]] = None) -> int:
             log.error("falha ao montar pipeline: %s", e)
             return 2
 
+        import time
+        print_banner()
+
+        # Estilo: --style tem prioridade; senão pergunta interativamente.
+        style = args.style or _ask_style_interactively()
+
         req = PipelineRequest(
             stages=_stages_for(args.stage),
             dry_run=dry_run,
             publish_confluence=publish_conf,
             notify_slack=notify_slack,
+            style=style,
         )
-
-        import time
-        print_banner()
         if verbose:
             log.info(
                 "iniciando pipeline: stages=%s dry_run=%s confluence=%s slack=%s",
@@ -233,6 +268,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             tickets=len(result.tickets),
             clusters=len(result.clusters),
             articles=len(result.articles),
+            customer_faqs=len(result.customer_faqs),
             published=published_count,
             errors=len(result.errors),
             duration_seconds=duration,

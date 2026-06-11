@@ -15,7 +15,7 @@ from tenacity import (
 
 from kiro.application.generation.base import LLMProvider
 from kiro.domain.exceptions import LLMError, LLMResponseError
-from kiro.domain.models import ArticleDraft, Cluster
+from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ
 
 log = logging.getLogger(__name__)
 
@@ -54,16 +54,24 @@ class GeminiProvider(LLMProvider):
 
     def generate_article(self, cluster: Cluster) -> ArticleDraft:
         prompt = self._build_prompt(cluster)
+        raw = self._safe_call(prompt)
+        return self._parse_response(raw)
+
+    def generate_customer_faq(self, cluster: Cluster) -> CustomerFAQ:
+        prompt = self._build_customer_faq_prompt(cluster)
+        raw = self._safe_call(prompt)
+        return self._parse_customer_faq_response(raw)
+
+    def _safe_call(self, prompt: str) -> str:
+        """Wrapper que converte HTTPError pós-retry em LLMError tipado."""
         try:
-            raw = self._call_api(prompt)
+            return self._call_api(prompt)
         except httpx.HTTPStatusError as e:
-            # tenacity esgotou — converte pra LLMError pra não vazar traceback
             raise LLMError(
                 f"Gemini API esgotou retries (status {e.response.status_code})"
             ) from e
         except httpx.HTTPError as e:
             raise LLMError(f"Gemini API erro de rede após retries: {e}") from e
-        return self._parse_response(raw)
 
     @retry(
         retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
@@ -148,12 +156,112 @@ class GeminiProvider(LLMProvider):
             descriptions_block = (
                 "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
             )
-        return f"""Você é um especialista em documentação técnica de suporte ao cliente da Kobe — empresa que desenvolve aplicativos móveis (iOS e Android) para grandes varejistas brasileiros (ex.: Amaro, Mr. Cat, Zaffari, Epharma).
+        return f"""Você está escrevendo um artigo de documentação para o varejista (cliente B2B da Kobe — Amaro, Mr. Cat, Zaffari, Epharma, etc.) ler e se auto-resolver SEM precisar abrir chamado de suporte.
 
-Sua tarefa: produzir um artigo de Base de Conhecimento **acertivo, específico e acionável**, em português do Brasil, a partir de tickets reais de suporte agrupados por similaridade.
+Esse artigo será publicado no Confluence público da Kobe e lido pelas equipes de produto/operação do varejista. O leitor NÃO tem nenhum contexto interno da Kobe.
 
 ═══════════════════════════════════════════════════════════════
-CONTEXTO DO CLUSTER
+CONTEXTO DO CLUSTER (tickets reais — USE como matéria-prima)
+═══════════════════════════════════════════════════════════════
+
+Tema do cluster: {cluster.topic}
+Total de tickets recorrentes no período: {cluster.count}
+Labels Jira (interno — NÃO mencione): {labels}
+Componentes/módulos afetados: {components}
+
+Títulos dos tickets de exemplo:
+{summaries}
+
+Descrições detalhadas (até 3 tickets com mais conteúdo):
+─────────────────────────────────────────────────────────────
+{descriptions_block}
+─────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════
+PROIBIÇÕES ABSOLUTAS — vazar isso quebra a confiança do cliente
+═══════════════════════════════════════════════════════════════
+
+NUNCA mencione:
+- "Causa raiz", "bug", "workaround", "regressão", "root cause" (linguagem interna)
+- Códigos de ticket (OPE-XXX) — o varejista não tem acesso ao Jira
+- Nomes de componentes internos da Kobe (ex: "WebView", "SDK Connect", módulo X) — usar termos do produto do varejista
+- "O time interno", "engenharia", "nosso backlog", "sprint" — termos de quem está dentro
+- Código-fonte, SQL, comandos shell, stack trace
+- Suposições sobre o que é bug vs. feature — fale do COMPORTAMENTO observado
+
+═══════════════════════════════════════════════════════════════
+DIRETRIZES POSITIVAS
+═══════════════════════════════════════════════════════════════
+
+1. ESCREVA COMO TUTORIAL/GUIA. O tom é "estamos te ensinando a usar". Não é
+   "esse problema acontece porque...". É "aqui está como configurar/usar X".
+
+2. PRESERVE OS FATOS DAS DESCRIÇÕES, MAS REFORMULE. Se a descrição diz "bug
+   na renderização da PDP", você escreve "ao exibir a página de produto, em
+   alguns casos a descrição pode aparecer cortada — siga estes passos".
+
+3. SEJA ACIONÁVEL. Cite caminhos REAIS no painel admin do varejista
+   ("Configurações > Integrações > X"), nomes de campos, etapas verificáveis.
+
+4. DISTINGA PLATAFORMAS quando aplicável (iOS / Android).
+
+5. Cada passo da solução começa com verbo no imperativo ("Verifique...",
+   "Acesse...", "Confirme..."). Mínimo 4 passos, ideal 5-8.
+
+6. A FAQ aborda perguntas que aparecem REALMENTE nos tickets — reformuladas
+   como o varejista perguntaria, não como o suporte interno descreve.
+
+═══════════════════════════════════════════════════════════════
+FORMATO DE RESPOSTA — JSON válido, sem markdown
+═══════════════════════════════════════════════════════════════
+
+Os campos abaixo têm RÓTULOS legados (problem/cause/solution), mas o conteúdo
+deve seguir essa SEMÂNTICA EXTERNA:
+
+{{
+  "title": "Título objetivo, em linguagem do varejista (5-12 palavras)",
+  "problem": "**Sobre este artigo**: contextualiza o tema em 2-4 frases, sem mencionar bugs. Descreve o cenário que o varejista pode enfrentar.",
+  "cause": "**Quando isso acontece**: situações ou configurações em que o cenário aparece (2-4 frases). NÃO usar 'causa raiz'. Algo como: 'Esse comportamento pode ocorrer quando...'",
+  "solution": "**Como resolver/configurar**: passos numerados separados por \\n. 4-8 passos acionáveis no painel/app do varejista.",
+  "faq": [
+    {{"question": "Pergunta real que o varejista faria", "answer": "Resposta direta, sem jargão interno"}},
+    {{"question": "...", "answer": "..."}},
+    {{"question": "...", "answer": "..."}}
+  ],
+  "tags": ["5 a 8 tags do domínio do varejista"]
+}}"""
+
+    @staticmethod
+    def _parse_response(raw: str) -> ArticleDraft:
+        cleaned = _FENCE_RE.sub("", raw).strip()
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            log.warning("Gemini retornou não-JSON; primeiros 200 chars: %r", cleaned[:200])
+            raise LLMResponseError(f"resposta Gemini não é JSON válido: {e}") from e
+        try:
+            return ArticleDraft.model_validate(data)
+        except PydanticValidationError as e:
+            log.warning("JSON do Gemini falhou no schema: %s", e)
+            raise LLMResponseError(f"JSON do Gemini não satisfaz o schema: {e}") from e
+
+    @staticmethod
+    def _build_customer_faq_prompt(cluster: Cluster) -> str:
+        summaries = "\n".join(f"- {s}" for s in cluster.summaries) or "(nenhum)"
+        labels = ", ".join(cluster.labels) or "nenhuma"
+        components = ", ".join(cluster.components) or "não identificados"
+        if cluster.sample_descriptions:
+            descriptions_block = "\n\n".join(cluster.sample_descriptions)
+        else:
+            descriptions_block = (
+                "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
+            )
+        return f"""Você é especialista em escrever FAQs self-service para clientes B2B da Kobe — empresa que desenvolve aplicativos móveis para grandes varejistas brasileiros (Amaro, Mr. Cat, Zaffari, Epharma, etc.).
+
+Sua tarefa: gerar um documento de Perguntas Frequentes que **o time de produto/operação do varejista** possa consultar ANTES de abrir um chamado de suporte. Ou seja, escrever conteúdo que o cliente leia e se resolva sozinho.
+
+═══════════════════════════════════════════════════════════════
+CONTEXTO DO CLUSTER (tickets reais que viraram esta FAQ)
 ═══════════════════════════════════════════════════════════════
 
 Tema identificado: {cluster.topic}
@@ -170,53 +278,63 @@ Descrições detalhadas (até 3 tickets com mais conteúdo):
 ─────────────────────────────────────────────────────────────
 
 ═══════════════════════════════════════════════════════════════
-DIRETRIZES OBRIGATÓRIAS — leia antes de escrever
+QUEM É O LEITOR (importante)
 ═══════════════════════════════════════════════════════════════
 
-1. SEJA ESPECÍFICO. Cite mensagens de erro reais, nomes de telas/campos, fluxos
-   e plataformas (iOS/Android) que aparecem nas descrições. Evite frases vagas.
+Equipes de PRODUTO ou OPERAÇÃO do varejista. NÃO são desenvolvedores, mas têm:
+- Acesso ao painel admin Kobe (CMS/configurações)
+- Familiaridade com termos como SDK, integração, push notification, deeplink
+- Capacidade de configurar campanhas, produtos, regras de cashback
 
-2. NÃO use bullets genéricos como "verifique as configurações", "limpe o cache"
-   sem dizer EXATAMENTE o quê verificar/limpar e em qual menu.
+NÃO assume conhecimento de: código, SQL, comandos shell, debugging, root cause análise.
 
-3. NÃO INVENTE causa. Se as descrições não dão pista da raiz, escreva:
-   "Causa a investigar" + 2-3 hipóteses concretas baseadas no padrão observado.
+═══════════════════════════════════════════════════════════════
+DIRETRIZES OBRIGATÓRIAS
+═══════════════════════════════════════════════════════════════
 
-4. DISTINGA PLATAFORMAS quando aplicável: se um problema só aparece em iOS,
-   diga "Em iOS:" antes do passo. Mesmo pra Android. Se atinge os dois, separe.
+1. CADA PERGUNTA é uma dúvida REAL que apareceu nos tickets — reformule no tom de quem está perguntando ("Por que...?", "Como faço para...?", "O que devo fazer quando...?").
 
-5. A FAQ deve antecipar dúvidas REAIS dos clientes/atendentes baseado nos
-   tickets — perguntas que apareceram nas descrições. Evite perguntas genéricas
-   tipo "o que é deeplink".
+2. CADA RESPOSTA é acionável em 2-5 frases:
+   - O que verificar (no painel? no app? na configuração?)
+   - O passo a passo curto
+   - O que esperar como resultado
 
-6. Cada passo da solução deve ser ACIONÁVEL: começa com verbo no imperativo
-   ("Verifique...", "Abra...", "Limpe..."), menciona caminhos (Configurações →
-   X → Y) ou comandos quando aplicável. Mínimo 4 passos, ideal 5-8.
+3. `when_to_contact` é OPCIONAL:
+   - Preencher SE há cenário em que a auto-resolução não funciona
+   - Format: "Se mesmo após verificar X, Y, Z, o problema persistir, abra um ticket de suporte fornecendo: [lista do que enviar — print, log de horário, exemplo de tela]"
+   - Deixar `null` se a resposta resolve sempre.
 
-7. O cliente da Kobe é tipicamente um **varejista** — fala numa linguagem
-   que faz sentido pra equipe de suporte de e-commerce/PDV, não pra usuário leigo.
+4. NUNCA mencione:
+   - Causa raiz interna (não dizer "é bug de WebView", apenas "configuração X precisa ser revisada")
+   - Códigos de ticket internos (OPE-XXX) — varejista não tem acesso ao Jira
+   - Código-fonte, SQL, comandos shell
+   - "Entre em contato com o suporte" sem antes esgotar o que o cliente pode fazer
+
+5. INTRO do documento (campo `intro`): 2-3 frases dizendo qual é o tópico e a quem se destina.
+
+6. MÍNIMO 5 entries. IDEAL 7-10.
 
 ═══════════════════════════════════════════════════════════════
 FORMATO DE RESPOSTA
 ═══════════════════════════════════════════════════════════════
 
-Responda APENAS com JSON válido, sem markdown, sem texto adicional. Estrutura:
+Responda APENAS com JSON válido, sem markdown, sem texto adicional:
 
 {{
-  "title": "Título objetivo de 5-12 palavras",
-  "problem": "Descrição do problema da perspectiva do cliente, 2-4 frases. Mencione sintomas específicos vistos nas descrições.",
-  "cause": "Causa raiz mais provável, baseada nas descrições. Se incerta, comece com 'Causa a investigar' e liste hipóteses. 2-4 frases.",
-  "solution": "Passos numerados separados por \\n. 4-8 passos acionáveis.",
-  "faq": [
-    {{"question": "Pergunta real que cliente/atendente faria", "answer": "Resposta direta e específica"}},
-    {{"question": "...", "answer": "..."}},
-    {{"question": "...", "answer": "..."}}
+  "title": "Título curto do tópico FAQ (5-12 palavras)",
+  "intro": "Parágrafo curto introduzindo o tema — quem deve ler e o que vai aprender",
+  "entries": [
+    {{
+      "question": "Pergunta direta como o leitor faria",
+      "answer": "Resposta acionável em 2-5 frases",
+      "when_to_contact": "Texto opcional sobre quando escalar pra suporte, ou null"
+    }}
   ],
-  "tags": ["5 a 8 tags específicas, sem genéricos"]
+  "tags": ["5 a 8 tags específicas"]
 }}"""
 
     @staticmethod
-    def _parse_response(raw: str) -> ArticleDraft:
+    def _parse_customer_faq_response(raw: str) -> CustomerFAQ:
         cleaned = _FENCE_RE.sub("", raw).strip()
         try:
             data = json.loads(cleaned)
@@ -224,7 +342,9 @@ Responda APENAS com JSON válido, sem markdown, sem texto adicional. Estrutura:
             log.warning("Gemini retornou não-JSON; primeiros 200 chars: %r", cleaned[:200])
             raise LLMResponseError(f"resposta Gemini não é JSON válido: {e}") from e
         try:
-            return ArticleDraft.model_validate(data)
+            return CustomerFAQ.model_validate(data)
         except PydanticValidationError as e:
-            log.warning("JSON do Gemini falhou no schema: %s", e)
-            raise LLMResponseError(f"JSON do Gemini não satisfaz o schema: {e}") from e
+            log.warning("JSON do Gemini falhou no schema CustomerFAQ: %s", e)
+            raise LLMResponseError(
+                f"JSON do Gemini não satisfaz o schema CustomerFAQ: {e}"
+            ) from e

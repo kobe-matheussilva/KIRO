@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Ticket(BaseModel):
@@ -43,13 +43,57 @@ class FAQItem(BaseModel):
 
 
 class ArticleDraft(BaseModel):
-    """Schema validado da resposta do LLM."""
+    """Artigo de Base de Conhecimento INTERNO (público: time de suporte Kobe).
+
+    Estrutura diagnóstica — problema/causa/solução/FAQ. Tom técnico,
+    pode mencionar root cause e workarounds internos.
+    """
 
     title: str = Field(..., min_length=1)
     problem: str = Field(..., min_length=1)
     cause: str = Field(..., min_length=1)
     solution: str = Field(..., min_length=1)
     faq: list[FAQItem] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class FAQEntry(BaseModel):
+    """Uma entrada de FAQ self-service voltada ao varejista B2B.
+
+    Diferente de FAQItem (que vive dentro de ArticleDraft do KB interno),
+    esta tem `when_to_contact` opcional indicando quando escalar para suporte.
+    """
+
+    question: str = Field(..., min_length=1)
+    answer: str = Field(..., min_length=1)
+    when_to_contact: Optional[str] = None
+
+    @field_validator("when_to_contact", mode="before")
+    @classmethod
+    def _normalize_null_strings(cls, v: object) -> Optional[str]:
+        """Gemini às vezes retorna a string literal 'null' em vez de JSON null.
+        Normaliza para None pra evitar renderizar 'null' nos artefatos."""
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip().lower() in ("", "null", "none", "n/a"):
+            return None
+        return v if isinstance(v, str) else None
+
+
+class CustomerFAQ(BaseModel):
+    """Documento FAQ self-service para varejistas B2B clientes da Kobe.
+
+    Audiência: equipes de produto/operação de Amaro, Mr.Cat, Zaffari, Epharma, etc.
+    Tom: direto, instrucional, sem jargão de engenharia. Pode citar "no painel admin",
+    "via SDK", "na seção X da integração".
+
+    Gerado em paralelo ao ArticleDraft a partir do MESMO cluster — atende a chefe
+    que pediu "documentos pro cliente ler sem precisar abrir chamado".
+    """
+
+    title: str = Field(..., min_length=1)
+    intro: str = Field(..., min_length=1)
+    entries: list[FAQEntry] = Field(..., min_length=3)
     tags: list[str] = Field(default_factory=list)
 
 
