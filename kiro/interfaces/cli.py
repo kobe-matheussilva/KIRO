@@ -14,10 +14,10 @@ from kiro.application.pipeline import OUTPUT_STYLES, STAGES, Pipeline, PipelineR
 from kiro.config.settings import Settings
 from kiro.domain.exceptions import ConfigError
 from kiro.infrastructure.confluence_client import ConfluenceClient
+from kiro.infrastructure.gitbook_loader import scrape_public_gitbook
 from kiro.infrastructure.jira_client import JiraClient
 from kiro.infrastructure.persistence import ArtifactStore
 from kiro.infrastructure.slack_client import SlackClient
-from kiro.infrastructure.gitbook_loader import scrape_public_gitbook
 from kiro.utils.branding import print_banner, print_footer
 from kiro.utils.logging import configure_logging
 from kiro.utils.progress import Narrator

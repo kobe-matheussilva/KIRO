@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from kiro.domain.models import ScrapingResult
 from kiro.interfaces.cli import build_parser, main
 
 
@@ -32,10 +33,9 @@ def test_main_dispatches_to_scraper(monkeypatch, tmp_path):
     _set_required(monkeypatch)
     monkeypatch.setenv("GITBOOK_CACHE_PATH", str(tmp_path / "cache.json"))
 
-    with patch(
+    with patch("kiro.interfaces.cli.print_banner"), patch(
         "kiro.interfaces.cli.scrape_public_gitbook"
     ) as mock_scrape:
-        from kiro.domain.models import ScrapingResult
         mock_scrape.return_value = ScrapingResult(
             pages_fetched=3,
             chunks_written=10,
