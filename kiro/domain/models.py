@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Ticket(BaseModel):
@@ -67,6 +67,17 @@ class FAQEntry(BaseModel):
     question: str = Field(..., min_length=1)
     answer: str = Field(..., min_length=1)
     when_to_contact: Optional[str] = None
+
+    @field_validator("when_to_contact", mode="before")
+    @classmethod
+    def _normalize_null_strings(cls, v: object) -> Optional[str]:
+        """Gemini às vezes retorna a string literal 'null' em vez de JSON null.
+        Normaliza para None pra evitar renderizar 'null' nos artefatos."""
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip().lower() in ("", "null", "none", "n/a"):
+            return None
+        return v if isinstance(v, str) else None
 
 
 class CustomerFAQ(BaseModel):
