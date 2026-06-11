@@ -7,8 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from kiro.domain.models import ArticleDraft, Cluster, PublishResult, Ticket
-from kiro.infrastructure.docx_exporter import article_to_docx
+from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, PublishResult, Ticket
+from kiro.infrastructure.docx_exporter import article_to_docx, customer_faq_to_docx
 from kiro.utils.branding import MARKDOWN_FOOTER
 
 # Casa "1.", "1)", "2 -", " 3. " no começo de uma linha — usado pra não numerar duas vezes
@@ -21,17 +21,24 @@ class ArtifactStore:
     def __init__(self, output_dir: Path) -> None:
         self._dir = Path(output_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
-        (self._dir / "drafts").mkdir(parents=True, exist_ok=True)
-        (self._dir / "docs").mkdir(parents=True, exist_ok=True)
+        # Subdiretórios por tipo de artefato — separa KB interno (drafts/docs)
+        # de FAQ B2B (faqs_md/faqs_docx) pra revisão organizada.
+        for subdir in ("drafts", "docs", "faqs_md", "faqs_docx"):
+            (self._dir / subdir).mkdir(parents=True, exist_ok=True)
 
     @property
     def root(self) -> Path:
         return self._dir
 
     def clear_drafts(self) -> int:
-        """Remove drafts antigos (.md e .docx). Retorna total de arquivos removidos."""
+        """Remove drafts e FAQs antigos (.md e .docx). Retorna total removido."""
         removed = 0
-        for subdir, pattern in (("drafts", "*.md"), ("docs", "*.docx")):
+        for subdir, pattern in (
+            ("drafts", "*.md"),
+            ("docs", "*.docx"),
+            ("faqs_md", "*.md"),
+            ("faqs_docx", "*.docx"),
+        ):
             d = self._dir / subdir
             if d.exists():
                 for path in d.glob(pattern):
@@ -59,22 +66,37 @@ class ArtifactStore:
         return self._write_json("articles.json", payload)
 
     def save_article_markdown(self, cluster: Cluster, article: ArticleDraft) -> Path:
-        path = self._dir / "drafts" / f"{self._safe_filename(cluster, article)}.md"
+        path = self._dir / "drafts" / f"{self._safe_filename(cluster, article.title)}.md"
         path.write_text(self._to_markdown(article, cluster), encoding="utf-8")
         log.info("draft salvo: %s", path)
         return path
 
     def save_article_docx(self, cluster: Cluster, article: ArticleDraft) -> Path:
         """Exporta o artigo como .docx (Word/Google Docs compatível)."""
-        path = self._dir / "docs" / f"{self._safe_filename(cluster, article)}.docx"
+        path = self._dir / "docs" / f"{self._safe_filename(cluster, article.title)}.docx"
         article_to_docx(article, cluster, path)
         log.info("doc salvo: %s", path)
         return path
 
+    def save_customer_faq_markdown(self, cluster: Cluster, faq: CustomerFAQ) -> Path:
+        """Salva o FAQ B2B como Markdown legível em output/faqs_md/."""
+        path = self._dir / "faqs_md" / f"{self._safe_filename(cluster, faq.title)}.md"
+        path.write_text(self._faq_to_markdown(faq, cluster), encoding="utf-8")
+        log.info("FAQ md salvo: %s", path)
+        return path
+
+    def save_customer_faq_docx(self, cluster: Cluster, faq: CustomerFAQ) -> Path:
+        """Exporta o FAQ B2B como .docx em output/faqs_docx/."""
+        path = self._dir / "faqs_docx" / f"{self._safe_filename(cluster, faq.title)}.docx"
+        customer_faq_to_docx(faq, cluster, path)
+        log.info("FAQ docx salvo: %s", path)
+        return path
+
     @staticmethod
-    def _safe_filename(cluster: Cluster, article: ArticleDraft) -> str:
+    def _safe_filename(cluster: Cluster, title: str) -> str:
+        """Slugify do título + prefixo do primeiro ticket pra dar âncora."""
         safe = "".join(
-            ch if ch.isalnum() or ch in "-_" else "_" for ch in article.title.lower()
+            ch if ch.isalnum() or ch in "-_" else "_" for ch in title.lower()
         )[:60].strip("_")
         prefix = cluster.tickets[0] if cluster.tickets else "cluster"
         return f"{prefix}_{safe or 'draft'}"
@@ -180,4 +202,27 @@ class ArtifactStore:
             f"- Labels: {', '.join(cluster.labels) or '—'}\n"
             f"- Tags: {', '.join(article.tags) or '—'}\n"
             f"{MARKDOWN_FOOTER}"
+        )
+
+    @staticmethod
+    def _faq_to_markdown(faq: CustomerFAQ, cluster: Cluster) -> str:
+        """Renderiza CustomerFAQ como Markdown — formato leve pra Google Docs e Confluence."""
+        entries_md = []
+        for idx, entry in enumerate(faq.entries, start=1):
+            block = f"### {idx}. {entry.question}\n\n{entry.answer}\n"
+            if entry.when_to_contact:
+                block += (
+                    f"\n> **Quando abrir um ticket de suporte:** {entry.when_to_contact}\n"
+                )
+            entries_md.append(block)
+        tags_md = ", ".join(f"`{t}`" for t in faq.tags) or "—"
+        return (
+            f"# {faq.title}\n\n"
+            f"> FAQ self-service para o time de produto/operação do varejista — "
+            f"gerada a partir de {cluster.count} tickets recorrentes.\n\n"
+            f"{faq.intro}\n\n"
+            f"## Perguntas frequentes\n\n"
+            + "\n".join(entries_md)
+            + f"\n## Tags\n\n{tags_md}\n"
+            + f"{MARKDOWN_FOOTER}"
         )
