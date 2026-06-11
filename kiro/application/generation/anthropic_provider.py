@@ -15,7 +15,7 @@ from tenacity import (
 
 from kiro.application.generation.base import LLMProvider
 from kiro.domain.exceptions import LLMError, LLMResponseError
-from kiro.domain.models import ArticleDraft, Cluster
+from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ
 
 log = logging.getLogger(__name__)
 
@@ -53,15 +53,23 @@ class AnthropicProvider(LLMProvider):
 
     def generate_article(self, cluster: Cluster) -> ArticleDraft:
         prompt = self._build_prompt(cluster)
+        raw = self._safe_call(prompt)
+        return self._parse_response(raw)
+
+    def generate_customer_faq(self, cluster: Cluster) -> CustomerFAQ:
+        prompt = self._build_customer_faq_prompt(cluster)
+        raw = self._safe_call(prompt)
+        return self._parse_customer_faq_response(raw)
+
+    def _safe_call(self, prompt: str) -> str:
         try:
-            raw = self._call_api(prompt)
+            return self._call_api(prompt)
         except httpx.HTTPStatusError as e:
             raise LLMError(
                 f"Anthropic API esgotou retries (status {e.response.status_code})"
             ) from e
         except httpx.HTTPError as e:
             raise LLMError(f"Anthropic API erro de rede após retries: {e}") from e
-        return self._parse_response(raw)
 
     @retry(
         retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
@@ -191,3 +199,26 @@ Responda APENAS com JSON válido, sem markdown, sem texto adicional. Estrutura:
         except PydanticValidationError as e:
             log.warning("JSON Anthropic falhou no schema: %s", e)
             raise LLMResponseError(f"JSON Anthropic não satisfaz o schema: {e}") from e
+
+    @staticmethod
+    def _build_customer_faq_prompt(cluster: Cluster) -> str:
+        # Mesmo prompt do Gemini — o conteúdo é agnostic de provedor.
+        # Importamos lazy pra evitar dependência circular sutil entre os arquivos.
+        from kiro.application.generation.gemini_provider import GeminiProvider
+        return GeminiProvider._build_customer_faq_prompt(cluster)
+
+    @staticmethod
+    def _parse_customer_faq_response(raw: str) -> CustomerFAQ:
+        cleaned = _FENCE_RE.sub("", raw).strip()
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            log.warning("Anthropic retornou não-JSON; primeiros 200 chars: %r", cleaned[:200])
+            raise LLMResponseError(f"resposta Anthropic não é JSON válido: {e}") from e
+        try:
+            return CustomerFAQ.model_validate(data)
+        except PydanticValidationError as e:
+            log.warning("JSON Anthropic falhou no schema CustomerFAQ: %s", e)
+            raise LLMResponseError(
+                f"JSON Anthropic não satisfaz o schema CustomerFAQ: {e}"
+            ) from e

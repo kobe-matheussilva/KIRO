@@ -3,7 +3,7 @@
 import logging
 
 from kiro.application.generation.base import LLMProvider
-from kiro.domain.models import ArticleDraft, Cluster, FAQItem
+from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, FAQEntry, FAQItem
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class MockLLMProvider(LLMProvider):
 
     def generate_article(self, cluster: Cluster) -> ArticleDraft:
         log.info(
-            "MOCK LLM: gerando draft local para cluster '%s' (%d tickets)",
+            "MOCK LLM: gerando draft KB interno para cluster '%s' (%d tickets)",
             cluster.topic,
             cluster.count,
         )
@@ -47,6 +47,55 @@ class MockLLMProvider(LLMProvider):
                         f"Os tickets de origem ({cluster.count} ao todo) reportam sintomas "
                         f"semelhantes a: {sample}."
                     ),
+                ),
+            ],
+            tags=tags,
+        )
+
+    def generate_customer_faq(self, cluster: Cluster) -> CustomerFAQ:
+        log.info(
+            "MOCK LLM: gerando FAQ B2B para cluster '%s' (%d tickets)",
+            cluster.topic,
+            cluster.count,
+        )
+        sample = cluster.summaries[0] if cluster.summaries else cluster.topic
+        tags = cluster.labels[:5] if cluster.labels else [
+            cluster.topic.split()[0].lower() or "geral"
+        ]
+        return CustomerFAQ(
+            title=f"[DRY-RUN] FAQ — {cluster.topic}",
+            intro=(
+                f"Este FAQ cobre dúvidas frequentes do time de produto/operação do "
+                f"varejista sobre '{cluster.topic}'. Foi gerado em modo dry-run a partir "
+                f"de {cluster.count} tickets recorrentes."
+            ),
+            entries=[
+                FAQEntry(
+                    question=f"O que devo saber sobre '{cluster.topic}'?",
+                    answer=(
+                        f"Este é um tema recorrente no suporte ({cluster.count} ocorrências). "
+                        f"Exemplo de sintoma reportado: {sample}."
+                    ),
+                    when_to_contact=None,
+                ),
+                FAQEntry(
+                    question="Quando devo abrir um ticket de suporte sobre isso?",
+                    answer=(
+                        "Após verificar as configurações no painel admin Kobe e ainda "
+                        "assim o problema persistir."
+                    ),
+                    when_to_contact=(
+                        "Abra um ticket fornecendo: print da tela com o problema, "
+                        "horário aproximado da ocorrência e identificador do varejista."
+                    ),
+                ),
+                FAQEntry(
+                    question="Onde encontro a configuração relacionada no painel?",
+                    answer=(
+                        "(Conteúdo simulado em modo dry-run — produção utilizará a IA real "
+                        "para gerar resposta específica baseada nas descrições dos tickets.)"
+                    ),
+                    when_to_contact=None,
                 ),
             ],
             tags=tags,

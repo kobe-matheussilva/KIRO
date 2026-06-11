@@ -15,7 +15,7 @@ from tenacity import (
 
 from kiro.application.generation.base import LLMProvider
 from kiro.domain.exceptions import LLMError, LLMResponseError
-from kiro.domain.models import ArticleDraft, Cluster
+from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ
 
 log = logging.getLogger(__name__)
 
@@ -54,16 +54,24 @@ class GeminiProvider(LLMProvider):
 
     def generate_article(self, cluster: Cluster) -> ArticleDraft:
         prompt = self._build_prompt(cluster)
+        raw = self._safe_call(prompt)
+        return self._parse_response(raw)
+
+    def generate_customer_faq(self, cluster: Cluster) -> CustomerFAQ:
+        prompt = self._build_customer_faq_prompt(cluster)
+        raw = self._safe_call(prompt)
+        return self._parse_customer_faq_response(raw)
+
+    def _safe_call(self, prompt: str) -> str:
+        """Wrapper que converte HTTPError pós-retry em LLMError tipado."""
         try:
-            raw = self._call_api(prompt)
+            return self._call_api(prompt)
         except httpx.HTTPStatusError as e:
-            # tenacity esgotou — converte pra LLMError pra não vazar traceback
             raise LLMError(
                 f"Gemini API esgotou retries (status {e.response.status_code})"
             ) from e
         except httpx.HTTPError as e:
             raise LLMError(f"Gemini API erro de rede após retries: {e}") from e
-        return self._parse_response(raw)
 
     @retry(
         retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
@@ -228,3 +236,107 @@ Responda APENAS com JSON válido, sem markdown, sem texto adicional. Estrutura:
         except PydanticValidationError as e:
             log.warning("JSON do Gemini falhou no schema: %s", e)
             raise LLMResponseError(f"JSON do Gemini não satisfaz o schema: {e}") from e
+
+    @staticmethod
+    def _build_customer_faq_prompt(cluster: Cluster) -> str:
+        summaries = "\n".join(f"- {s}" for s in cluster.summaries) or "(nenhum)"
+        labels = ", ".join(cluster.labels) or "nenhuma"
+        components = ", ".join(cluster.components) or "não identificados"
+        if cluster.sample_descriptions:
+            descriptions_block = "\n\n".join(cluster.sample_descriptions)
+        else:
+            descriptions_block = (
+                "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
+            )
+        return f"""Você é especialista em escrever FAQs self-service para clientes B2B da Kobe — empresa que desenvolve aplicativos móveis para grandes varejistas brasileiros (Amaro, Mr. Cat, Zaffari, Epharma, etc.).
+
+Sua tarefa: gerar um documento de Perguntas Frequentes que **o time de produto/operação do varejista** possa consultar ANTES de abrir um chamado de suporte. Ou seja, escrever conteúdo que o cliente leia e se resolva sozinho.
+
+═══════════════════════════════════════════════════════════════
+CONTEXTO DO CLUSTER (tickets reais que viraram esta FAQ)
+═══════════════════════════════════════════════════════════════
+
+Tema identificado: {cluster.topic}
+Total de tickets recorrentes no período: {cluster.count}
+Labels Jira aplicadas: {labels}
+Componentes/módulos afetados: {components}
+
+Títulos dos tickets de exemplo:
+{summaries}
+
+Descrições detalhadas (até 3 tickets com mais conteúdo):
+─────────────────────────────────────────────────────────────
+{descriptions_block}
+─────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════
+QUEM É O LEITOR (importante)
+═══════════════════════════════════════════════════════════════
+
+Equipes de PRODUTO ou OPERAÇÃO do varejista. NÃO são desenvolvedores, mas têm:
+- Acesso ao painel admin Kobe (CMS/configurações)
+- Familiaridade com termos como SDK, integração, push notification, deeplink
+- Capacidade de configurar campanhas, produtos, regras de cashback
+
+NÃO assume conhecimento de: código, SQL, comandos shell, debugging, root cause análise.
+
+═══════════════════════════════════════════════════════════════
+DIRETRIZES OBRIGATÓRIAS
+═══════════════════════════════════════════════════════════════
+
+1. CADA PERGUNTA é uma dúvida REAL que apareceu nos tickets — reformule no tom de quem está perguntando ("Por que...?", "Como faço para...?", "O que devo fazer quando...?").
+
+2. CADA RESPOSTA é acionável em 2-5 frases:
+   - O que verificar (no painel? no app? na configuração?)
+   - O passo a passo curto
+   - O que esperar como resultado
+
+3. `when_to_contact` é OPCIONAL:
+   - Preencher SE há cenário em que a auto-resolução não funciona
+   - Format: "Se mesmo após verificar X, Y, Z, o problema persistir, abra um ticket de suporte fornecendo: [lista do que enviar — print, log de horário, exemplo de tela]"
+   - Deixar `null` se a resposta resolve sempre.
+
+4. NUNCA mencione:
+   - Causa raiz interna (não dizer "é bug de WebView", apenas "configuração X precisa ser revisada")
+   - Códigos de ticket internos (OPE-XXX) — varejista não tem acesso ao Jira
+   - Código-fonte, SQL, comandos shell
+   - "Entre em contato com o suporte" sem antes esgotar o que o cliente pode fazer
+
+5. INTRO do documento (campo `intro`): 2-3 frases dizendo qual é o tópico e a quem se destina.
+
+6. MÍNIMO 5 entries. IDEAL 7-10.
+
+═══════════════════════════════════════════════════════════════
+FORMATO DE RESPOSTA
+═══════════════════════════════════════════════════════════════
+
+Responda APENAS com JSON válido, sem markdown, sem texto adicional:
+
+{{
+  "title": "Título curto do tópico FAQ (5-12 palavras)",
+  "intro": "Parágrafo curto introduzindo o tema — quem deve ler e o que vai aprender",
+  "entries": [
+    {{
+      "question": "Pergunta direta como o leitor faria",
+      "answer": "Resposta acionável em 2-5 frases",
+      "when_to_contact": "Texto opcional sobre quando escalar pra suporte, ou null"
+    }}
+  ],
+  "tags": ["5 a 8 tags específicas"]
+}}"""
+
+    @staticmethod
+    def _parse_customer_faq_response(raw: str) -> CustomerFAQ:
+        cleaned = _FENCE_RE.sub("", raw).strip()
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            log.warning("Gemini retornou não-JSON; primeiros 200 chars: %r", cleaned[:200])
+            raise LLMResponseError(f"resposta Gemini não é JSON válido: {e}") from e
+        try:
+            return CustomerFAQ.model_validate(data)
+        except PydanticValidationError as e:
+            log.warning("JSON do Gemini falhou no schema CustomerFAQ: %s", e)
+            raise LLMResponseError(
+                f"JSON do Gemini não satisfaz o schema CustomerFAQ: {e}"
+            ) from e
