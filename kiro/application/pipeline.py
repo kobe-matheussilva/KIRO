@@ -16,7 +16,7 @@ from kiro.domain.exceptions import (
     LLMError,
     SlackError,
 )
-from kiro.domain.models import ArticleDraft, Cluster, PublishResult, Ticket
+from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, PublishResult, Ticket
 from kiro.infrastructure.confluence_client import ConfluenceClient
 from kiro.infrastructure.jira_client import JiraClient
 from kiro.infrastructure.persistence import ArtifactStore
@@ -41,6 +41,7 @@ class PipelineResult:
     tickets: list[Ticket] = field(default_factory=list)
     clusters: list[Cluster] = field(default_factory=list)
     articles: list[tuple[Cluster, ArticleDraft]] = field(default_factory=list)
+    customer_faqs: list[tuple[Cluster, CustomerFAQ]] = field(default_factory=list)
     publish_results: list[PublishResult] = field(default_factory=list)
     errors: list[dict] = field(default_factory=list)
     artifacts_dir: Optional[Path] = None
@@ -138,44 +139,109 @@ class Pipeline:
         self.store.save_clusters(result.clusters)
 
     def _stage_generate(self, result: PipelineResult) -> None:
-        # cada rodada começa com drafts/ limpo — evita acúmulo entre execuções
+        # cada rodada começa com drafts/ + FAQs/ limpos
         self.store.clear_drafts()
-        self.narrator.section(f"escrevendo {len(result.clusters)} artigos com IA")
-        # Em dry-run o provider é Mock (não chama API), então throttle não faz
-        # sentido — só atrasaria a demo sem benefício.
+        self.narrator.section(
+            f"escrevendo {len(result.clusters)} pares (KB interno + FAQ B2B) com IA"
+        )
+        # Em dry-run o provider é Mock (não chama API), throttle não tem razão.
         is_mock = type(self.llm).__name__ == "MockLLMProvider"
         effective_delay = 0.0 if is_mock else self.llm_request_delay_seconds
-        for idx, cluster in enumerate(result.clusters):
-            if idx > 0 and effective_delay > 0:
+
+        def throttle_if_needed() -> None:
+            if effective_delay > 0:
                 with self.narrator.step(
-                    f"aguardando {effective_delay:.0f}s para respeitar o rate limit do Gemini..."
+                    f"aguardando {effective_delay:.0f}s para respeitar rate limit do LLM..."
                 ):
                     time.sleep(effective_delay)
-            try:
-                with self.narrator.step(
-                    f"redigindo artigo sobre '{cluster.topic[:60]}'..."
-                ):
-                    article = self.llm.generate_article(cluster)
-                self.narrator.done(f'"{article.title}"  ({cluster.count} tickets)')
-            except LLMError as e:
-                self.narrator.fail(f"falhei em '{cluster.topic[:50]}' — {e}")
-                log.error("LLM falhou no cluster '%s': %s", cluster.topic, e)
-                result.errors.append(
-                    {"stage": "generate", "topic": cluster.topic, "error": str(e)}
-                )
-                continue
-            except Exception as e:  # noqa: BLE001 — continue per cluster
-                self.narrator.fail(f"erro inesperado em '{cluster.topic[:50]}'")
-                log.exception("falha inesperada gerando artigo: %s", cluster.topic)
-                result.errors.append(
-                    {"stage": "generate", "topic": cluster.topic, "error": repr(e)}
-                )
+
+        for idx, cluster in enumerate(result.clusters):
+            if idx > 0:
+                throttle_if_needed()
+
+            # ─── 1) KB interno (para time de suporte) ──────────────
+            article = self._try_generate_article(cluster, result)
+            if article is None:
+                # KB falhou: não gasta quota tentando FAQ; pula pro próximo
                 continue
 
+            # throttle entre as 2 chamadas do mesmo cluster
+            throttle_if_needed()
+
+            # ─── 2) FAQ B2B (para varejista, self-service) ─────────
+            self._try_generate_customer_faq(cluster, result)
+
+        self.store.save_articles(result.articles)
+        if result.customer_faqs:
+            self.store.save_customer_faqs(result.customer_faqs)
+
+    def _try_generate_article(
+        self, cluster: Cluster, result: PipelineResult
+    ) -> Optional[ArticleDraft]:
+        try:
+            with self.narrator.step(
+                f"KB interno: redigindo sobre '{cluster.topic[:60]}'..."
+            ):
+                article = self.llm.generate_article(cluster)
+            self.narrator.done(f'KB:  "{article.title}"  ({cluster.count} tickets)')
             result.articles.append((cluster, article))
             self.store.save_article_markdown(cluster, article)
             self.store.save_article_docx(cluster, article)
-        self.store.save_articles(result.articles)
+            return article
+        except LLMError as e:
+            self.narrator.fail(f"KB falhou em '{cluster.topic[:50]}' — {e}")
+            log.error("LLM article falhou no cluster '%s': %s", cluster.topic, e)
+            result.errors.append({
+                "stage": "generate",
+                "type": "article",
+                "topic": cluster.topic,
+                "error": str(e),
+            })
+            return None
+        except Exception as e:  # noqa: BLE001 — continue per cluster
+            self.narrator.fail(f"erro inesperado no KB de '{cluster.topic[:50]}'")
+            log.exception("falha inesperada gerando KB: %s", cluster.topic)
+            result.errors.append({
+                "stage": "generate",
+                "type": "article",
+                "topic": cluster.topic,
+                "error": repr(e),
+            })
+            return None
+
+    def _try_generate_customer_faq(
+        self, cluster: Cluster, result: PipelineResult
+    ) -> Optional[CustomerFAQ]:
+        try:
+            with self.narrator.step(
+                f"FAQ B2B: redigindo sobre '{cluster.topic[:60]}'..."
+            ):
+                faq = self.llm.generate_customer_faq(cluster)
+            self.narrator.done(f'FAQ: "{faq.title}"  ({len(faq.entries)} perguntas)')
+            result.customer_faqs.append((cluster, faq))
+            self.store.save_customer_faq_markdown(cluster, faq)
+            self.store.save_customer_faq_docx(cluster, faq)
+            return faq
+        except LLMError as e:
+            self.narrator.fail(f"FAQ falhou em '{cluster.topic[:50]}' — {e}")
+            log.error("LLM FAQ falhou no cluster '%s': %s", cluster.topic, e)
+            result.errors.append({
+                "stage": "generate",
+                "type": "faq",
+                "topic": cluster.topic,
+                "error": str(e),
+            })
+            return None
+        except Exception as e:  # noqa: BLE001 — continue per cluster
+            self.narrator.fail(f"erro inesperado no FAQ de '{cluster.topic[:50]}'")
+            log.exception("falha inesperada gerando FAQ: %s", cluster.topic)
+            result.errors.append({
+                "stage": "generate",
+                "type": "faq",
+                "topic": cluster.topic,
+                "error": repr(e),
+            })
+            return None
 
     def _stage_publish(self, result: PipelineResult, request: PipelineRequest) -> None:
         if not result.articles:
@@ -255,6 +321,7 @@ class Pipeline:
             started,
             finished,
             articles=result.articles,
+            customer_faqs=result.customer_faqs,
             tickets_collected=len(result.tickets),
             clusters_detected=len(result.clusters),
         )

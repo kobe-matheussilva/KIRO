@@ -233,6 +233,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             tickets=len(result.tickets),
             clusters=len(result.clusters),
             articles=len(result.articles),
+            customer_faqs=len(result.customer_faqs),
             published=published_count,
             errors=len(result.errors),
             duration_seconds=duration,

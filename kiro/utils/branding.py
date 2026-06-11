@@ -34,6 +34,7 @@ def print_footer(
     tickets: int,
     clusters: int,
     articles: int,
+    customer_faqs: int = 0,
     published: int,
     errors: int,
     duration_seconds: float,
@@ -47,7 +48,8 @@ def print_footer(
     print(f"   {bar}")
     print(f"     tickets coletados       : {tickets:>5}")
     print(f"     clusters detectados     : {clusters:>5}")
-    print(f"     artigos gerados pela IA : {articles:>5}")
+    print(f"     KBs internos gerados    : {articles:>5}")
+    print(f"     FAQs B2B gerados        : {customer_faqs:>5}")
     print(f"     publicados no Confluence: {published:>5}")
     print(f"     falhas                  : {errors:>5}")
     print(f"     duração                 : {duration_seconds:>5.1f}s")

@@ -65,6 +65,13 @@ class ArtifactStore:
         ]
         return self._write_json("articles.json", payload)
 
+    def save_customer_faqs(self, faqs: list[tuple[Cluster, CustomerFAQ]]) -> Path:
+        payload = [
+            {"cluster": c.model_dump(mode="json"), "faq": f.model_dump(mode="json")}
+            for c, f in faqs
+        ]
+        return self._write_json("customer_faqs.json", payload)
+
     def save_article_markdown(self, cluster: Cluster, article: ArticleDraft) -> Path:
         path = self._dir / "drafts" / f"{self._safe_filename(cluster, article.title)}.md"
         path.write_text(self._to_markdown(article, cluster), encoding="utf-8")
@@ -110,16 +117,18 @@ class ArtifactStore:
         started_at: datetime,
         finished_at: datetime,
         articles: Optional[list[tuple[Cluster, ArticleDraft]]] = None,
+        customer_faqs: Optional[list[tuple[Cluster, CustomerFAQ]]] = None,
         tickets_collected: int = 0,
         clusters_detected: int = 0,
     ) -> Path:
         """Gera report.md.
 
-        Conta sucesso por etapa: tickets coletados, clusters detectados, artigos
-        gerados (com IA) e artigos publicados externamente. Cada etapa é
-        independente — útil quando se roda apenas `--stage generate` (sem publish).
+        Conta sucesso por etapa: tickets coletados, clusters detectados, KBs
+        internos gerados, FAQs B2B geradas, publicados externamente. Cada etapa
+        é independente — útil quando se roda apenas `--stage generate`.
         """
         articles = articles or []
+        customer_faqs = customer_faqs or []
         lines = [
             "# KIRO — Relatório de execução",
             "",
@@ -131,21 +140,36 @@ class ArtifactStore:
             "",
             f"- Tickets coletados:    **{tickets_collected}**",
             f"- Clusters detectados:  **{clusters_detected}**",
-            f"- Artigos gerados (IA): **{len(articles)}**",
+            f"- KBs internos gerados (IA): **{len(articles)}**",
+            f"- FAQs B2B gerados (IA):     **{len(customer_faqs)}**",
             f"- Publicados externamente: **{sum(1 for r in results if r.succeeded and r.confluence_url)}**",
-            f"- Falhas de publicação: **{sum(1 for r in results if not r.succeeded)}**",
+            f"- Falhas de publicação:    **{sum(1 for r in results if not r.succeeded)}**",
             "",
         ]
 
         if articles:
-            lines += ["## Artigos gerados pela IA", ""]
+            lines += ["## KBs internos gerados (time de suporte)", ""]
             for i, (cluster, article) in enumerate(articles, 1):
                 tags = ", ".join(article.tags[:6]) or "—"
                 lines.append(
                     f"{i}. **{article.title}** — {cluster.count} tickets"
                 )
                 lines.append(f"   - tags: {tags}")
-                lines.append(f"   - tickets de origem: {', '.join(f'`{k}`' for k in cluster.tickets[:5])}{' …' if len(cluster.tickets) > 5 else ''}")
+                lines.append(
+                    f"   - tickets de origem: {', '.join(f'`{k}`' for k in cluster.tickets[:5])}"
+                    f"{' …' if len(cluster.tickets) > 5 else ''}"
+                )
+            lines.append("")
+
+        if customer_faqs:
+            lines += ["## FAQs B2B gerados (varejista — self-service)", ""]
+            for i, (cluster, faq) in enumerate(customer_faqs, 1):
+                tags = ", ".join(faq.tags[:6]) or "—"
+                lines.append(
+                    f"{i}. **{faq.title}** — {len(faq.entries)} perguntas, "
+                    f"{cluster.count} tickets de origem"
+                )
+                lines.append(f"   - tags: {tags}")
             lines.append("")
 
         if results:
@@ -161,7 +185,7 @@ class ArtifactStore:
                     lines.append(f"   - erro: `{r.error}`")
             lines.append("")
 
-        if not articles and not results:
+        if not articles and not customer_faqs and not results:
             lines.append("_Nenhum artigo gerado nem publicado nessa rodada._")
 
         path = self._dir / "report.md"
