@@ -16,7 +16,7 @@ from kiro.domain.exceptions import (
     LLMError,
     SlackError,
 )
-from kiro.domain.models import ArticleDraft, Cluster, PublishResult, Ticket
+from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, PublishResult, Ticket
 from kiro.infrastructure.confluence_client import ConfluenceClient
 from kiro.infrastructure.jira_client import JiraClient
 from kiro.infrastructure.persistence import ArtifactStore
@@ -28,12 +28,20 @@ log = logging.getLogger(__name__)
 STAGES: tuple[str, ...] = ("fetch", "cluster", "generate", "publish", "notify")
 
 
+# Estilos disponíveis para os artigos gerados (escolhido por rodada).
+# Todos os estilos produzem conteúdo EXTERNO/cliente-facing.
+OUTPUT_STYLES: tuple[str, ...] = ("artigo", "faq")
+
+
 @dataclass(frozen=True)
 class PipelineRequest:
     stages: tuple[str, ...] = STAGES
     dry_run: bool = False
     publish_confluence: bool = False
     notify_slack: bool = False
+    # "artigo" = texto corrido (Sobre/Quando/Como/FAQ);
+    # "faq"    = perguntas e respostas self-service
+    style: str = "artigo"
 
 
 @dataclass
@@ -41,6 +49,7 @@ class PipelineResult:
     tickets: list[Ticket] = field(default_factory=list)
     clusters: list[Cluster] = field(default_factory=list)
     articles: list[tuple[Cluster, ArticleDraft]] = field(default_factory=list)
+    customer_faqs: list[tuple[Cluster, CustomerFAQ]] = field(default_factory=list)
     publish_results: list[PublishResult] = field(default_factory=list)
     errors: list[dict] = field(default_factory=list)
     artifacts_dir: Optional[Path] = None
@@ -93,7 +102,7 @@ class Pipeline:
                 return self._finalize(result, started)
 
         if "generate" in stages:
-            self._stage_generate(result)
+            self._stage_generate(result, request)
 
         if "publish" in stages:
             self._stage_publish(result, request)
@@ -137,45 +146,61 @@ class Pipeline:
         )
         self.store.save_clusters(result.clusters)
 
-    def _stage_generate(self, result: PipelineResult) -> None:
-        # cada rodada começa com drafts/ limpo — evita acúmulo entre execuções
+    def _stage_generate(self, result: PipelineResult, request: PipelineRequest) -> None:
         self.store.clear_drafts()
-        self.narrator.section(f"escrevendo {len(result.clusters)} artigos com IA")
-        # Em dry-run o provider é Mock (não chama API), então throttle não faz
-        # sentido — só atrasaria a demo sem benefício.
+        style = request.style if request.style in OUTPUT_STYLES else "artigo"
+        label = "FAQ" if style == "faq" else "Artigo"
+        self.narrator.section(
+            f"escrevendo {len(result.clusters)} {label}s com IA (estilo: {style})"
+        )
         is_mock = type(self.llm).__name__ == "MockLLMProvider"
         effective_delay = 0.0 if is_mock else self.llm_request_delay_seconds
         for idx, cluster in enumerate(result.clusters):
             if idx > 0 and effective_delay > 0:
                 with self.narrator.step(
-                    f"aguardando {effective_delay:.0f}s para respeitar o rate limit do Gemini..."
+                    f"aguardando {effective_delay:.0f}s para respeitar rate limit do LLM..."
                 ):
                     time.sleep(effective_delay)
             try:
-                with self.narrator.step(
-                    f"redigindo artigo sobre '{cluster.topic[:60]}'..."
-                ):
-                    article = self.llm.generate_article(cluster)
-                self.narrator.done(f'"{article.title}"  ({cluster.count} tickets)')
+                if style == "faq":
+                    with self.narrator.step(
+                        f"redigindo FAQ sobre '{cluster.topic[:60]}'..."
+                    ):
+                        faq = self.llm.generate_customer_faq(cluster)
+                    self.narrator.done(
+                        f'"{faq.title}"  ({len(faq.entries)} perguntas, {cluster.count} tickets)'
+                    )
+                    result.customer_faqs.append((cluster, faq))
+                    self.store.save_customer_faq_markdown(cluster, faq)
+                    self.store.save_customer_faq_docx(cluster, faq)
+                else:  # "artigo"
+                    with self.narrator.step(
+                        f"redigindo Artigo sobre '{cluster.topic[:60]}'..."
+                    ):
+                        article = self.llm.generate_article(cluster)
+                    self.narrator.done(f'"{article.title}"  ({cluster.count} tickets)')
+                    result.articles.append((cluster, article))
+                    self.store.save_article_markdown(cluster, article)
+                    self.store.save_article_docx(cluster, article)
             except LLMError as e:
                 self.narrator.fail(f"falhei em '{cluster.topic[:50]}' — {e}")
                 log.error("LLM falhou no cluster '%s': %s", cluster.topic, e)
                 result.errors.append(
-                    {"stage": "generate", "topic": cluster.topic, "error": str(e)}
+                    {"stage": "generate", "style": style, "topic": cluster.topic, "error": str(e)}
                 )
                 continue
             except Exception as e:  # noqa: BLE001 — continue per cluster
                 self.narrator.fail(f"erro inesperado em '{cluster.topic[:50]}'")
-                log.exception("falha inesperada gerando artigo: %s", cluster.topic)
+                log.exception("falha inesperada gerando %s: %s", style, cluster.topic)
                 result.errors.append(
-                    {"stage": "generate", "topic": cluster.topic, "error": repr(e)}
+                    {"stage": "generate", "style": style, "topic": cluster.topic, "error": repr(e)}
                 )
                 continue
 
-            result.articles.append((cluster, article))
-            self.store.save_article_markdown(cluster, article)
-            self.store.save_article_docx(cluster, article)
-        self.store.save_articles(result.articles)
+        if result.articles:
+            self.store.save_articles(result.articles)
+        if result.customer_faqs:
+            self.store.save_customer_faqs(result.customer_faqs)
 
     def _stage_publish(self, result: PipelineResult, request: PipelineRequest) -> None:
         if not result.articles:

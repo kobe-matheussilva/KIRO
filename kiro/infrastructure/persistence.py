@@ -65,6 +65,13 @@ class ArtifactStore:
         ]
         return self._write_json("articles.json", payload)
 
+    def save_customer_faqs(self, faqs: list[tuple[Cluster, CustomerFAQ]]) -> Path:
+        payload = [
+            {"cluster": c.model_dump(mode="json"), "faq": f.model_dump(mode="json")}
+            for c, f in faqs
+        ]
+        return self._write_json("customer_faqs.json", payload)
+
     def save_article_markdown(self, cluster: Cluster, article: ArticleDraft) -> Path:
         path = self._dir / "drafts" / f"{self._safe_filename(cluster, article.title)}.md"
         path.write_text(self._to_markdown(article, cluster), encoding="utf-8")
@@ -189,20 +196,26 @@ class ArtifactStore:
             f"**{f.question}**\n\n{f.answer}\n" for f in article.faq
         )
         tickets_md = ", ".join(f"`{k}`" for k in cluster.tickets[:15])
-        return (
+        # CORPO PUBLICÁVEL (sem informação interna — vai pro cliente B2B)
+        body = (
             f"# {article.title}\n\n"
-            f"> Rascunho gerado a partir de {cluster.count} tickets.\n\n"
-            f"**Tickets de origem:** {tickets_md}\n\n"
-            f"## Problema\n\n{article.problem}\n\n"
-            f"## Causa raiz\n\n{article.cause}\n\n"
-            f"## Solução\n\n{steps_md}\n\n"
-            f"## Perguntas frequentes\n\n{faq_md or '_Sem FAQ._'}\n\n"
-            f"## Metadados\n\n"
-            f"- Componentes: {', '.join(cluster.components) or '—'}\n"
-            f"- Labels: {', '.join(cluster.labels) or '—'}\n"
-            f"- Tags: {', '.join(article.tags) or '—'}\n"
-            f"{MARKDOWN_FOOTER}"
+            f"## Sobre este artigo\n\n{article.problem}\n\n"
+            f"## Quando isso acontece\n\n{article.cause}\n\n"
+            f"## Como resolver\n\n{steps_md}\n\n"
+            f"## Perguntas frequentes\n\n{faq_md or '_Sem perguntas frequentes._'}\n\n"
+            f"**Tags:** {', '.join(article.tags) or '—'}\n"
         )
+        # NOTA DE REVISÃO — para o time de doc antes de publicar (REMOVER ANTES)
+        review = (
+            f"\n---\n\n"
+            f"> ⚠️ **Nota interna — remover antes de publicar no Confluence**\n"
+            f">\n"
+            f"> Este rascunho foi gerado a partir de {cluster.count} tickets do projeto OPE: {tickets_md}.\n"
+            f"> Labels Jira: {', '.join(cluster.labels) or '—'}.\n"
+            f"> Componentes: {', '.join(cluster.components) or '—'}.\n"
+            f"> Audite linguagem para garantir tom externo (sem citar bugs, causa raiz, ticket IDs).\n"
+        )
+        return body + review + MARKDOWN_FOOTER
 
     @staticmethod
     def _faq_to_markdown(faq: CustomerFAQ, cluster: Cluster) -> str:
