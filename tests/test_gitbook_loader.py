@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from kiro.domain.models import GitBookChunk, ScrapingResult
 from kiro.infrastructure.gitbook_loader import (
+    _chunk_page,
     _extract_page_title,
     _find_content_container,
     _parse_sitemap,
@@ -174,3 +175,60 @@ def test_page_title_ignores_h1_inside_head():
         "html.parser",
     )
     assert _extract_page_title(soup) == "Body title"
+
+
+def test_chunk_by_heading_three_sections():
+    html = """
+    <main>
+      <h1>Página</h1>
+      <h2>Introdução</h2>
+      <p>Texto da introdução suficiente pra teste.</p>
+      <h2>Configuração</h2>
+      <p>Passo um.</p>
+      <p>Passo dois.</p>
+      <h2>Conclusão</h2>
+      <p>Fim.</p>
+    </main>
+    """
+    chunks = _chunk_page(html, page_url="https://x.com/p1")
+    assert [c.section_title for c in chunks] == ["Introdução", "Configuração", "Conclusão"]
+    assert all(c.page_title == "Página" for c in chunks)
+    assert all(c.page_url == "https://x.com/p1" for c in chunks)
+    assert "Passo um" in chunks[1].content
+    assert "Passo dois" in chunks[1].content
+
+
+def test_chunk_keeps_short_section():
+    html = """
+    <main>
+      <h1>Página</h1>
+      <h2>Limite iOS</h2>
+      <p>Suporte apenas iOS 15+.</p>
+    </main>
+    """
+    chunks = _chunk_page(html, page_url="https://x.com/p1")
+    assert len(chunks) == 1
+    assert chunks[0].section_title == "Limite iOS"
+    assert "iOS 15+" in chunks[0].content
+    assert chunks[0].char_count < 50
+
+
+def test_chunk_returns_empty_when_no_container():
+    chunks = _chunk_page("<html><body><p>nada</p></body></html>", page_url="https://x.com/p1")
+    assert chunks == []
+
+
+def test_chunk_uses_intro_section_when_text_before_first_heading():
+    html = """
+    <main>
+      <h1>Página</h1>
+      <p>Intro sem heading próprio.</p>
+      <h2>Seção</h2>
+      <p>Conteúdo.</p>
+    </main>
+    """
+    chunks = _chunk_page(html, page_url="https://x.com/p1")
+    assert len(chunks) == 2
+    assert chunks[0].section_title == "Página"
+    assert "Intro sem heading próprio" in chunks[0].content
+    assert chunks[1].section_title == "Seção"

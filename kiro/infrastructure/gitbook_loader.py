@@ -14,6 +14,8 @@ from typing import Optional
 
 from bs4 import BeautifulSoup, Tag
 
+from kiro.domain.models import GitBookChunk
+
 log = logging.getLogger(__name__)
 
 _SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
@@ -102,3 +104,70 @@ def _slugify(text: str) -> str:
     lowered = ascii_only.lower()
     slug = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
     return slug
+
+
+_HEADING_TAGS = {"h1", "h2", "h3"}
+
+
+def _chunk_page(html: str, page_url: str) -> list[GitBookChunk]:
+    """Quebra a página em chunks por heading (h1/h2/h3).
+
+    Texto antes do primeiro heading é atribuído a uma "seção intro"
+    com title = page_title. Seções > 1000 chars são sub-divididas.
+    Seções < 200 chars são preservadas (info curta também é útil).
+
+    Retorna lista vazia se container principal não for encontrado.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    container = _find_content_container(soup)
+    if container is None:
+        return []
+
+    page_title = _extract_page_title(soup)
+
+    # Coleta (section_title, section_anchor, [paragraphs]) em ordem
+    sections: list[tuple[str, str, list[str]]] = []
+    current_title = page_title
+    current_anchor = _slugify(page_title)
+    current_paragraphs: list[str] = []
+
+    for element in container.descendants:
+        if not isinstance(element, Tag):
+            continue
+        # Pula descendants dentro de heading (já capturado pelo heading)
+        if element.find_parent(_HEADING_TAGS - {element.name} if element.name in _HEADING_TAGS else _HEADING_TAGS):
+            # Defensivo: evita pegar <span> dentro de <h2> como parágrafo
+            if element.name not in _HEADING_TAGS:
+                continue
+        if element.name in _HEADING_TAGS:
+            # Fecha a seção atual antes de abrir a nova
+            if current_paragraphs:
+                sections.append((current_title, current_anchor, current_paragraphs))
+            current_title = element.get_text(strip=True) or "(sem título)"
+            current_anchor = _section_anchor(element)
+            current_paragraphs = []
+        elif element.name in {"p", "li"}:
+            text = element.get_text(separator=" ", strip=True)
+            if text:
+                current_paragraphs.append(text)
+
+    # Fecha última seção
+    if current_paragraphs:
+        sections.append((current_title, current_anchor, current_paragraphs))
+
+    # Materializa chunks (sub-dividir quando >1000 chars vem na Task 7)
+    chunks: list[GitBookChunk] = []
+    for title, anchor, paragraphs in sections:
+        content = "\n\n".join(paragraphs).strip()
+        if not content:
+            continue
+        chunks.append(
+            GitBookChunk(
+                page_title=page_title,
+                page_url=page_url,
+                section_title=title,
+                section_anchor=anchor,
+                content=content,
+            )
+        )
+    return chunks
