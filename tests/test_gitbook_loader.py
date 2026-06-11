@@ -1,6 +1,9 @@
 """Testes do scraper de GitBook público (issue #2)."""
 
+from pathlib import Path
+
 import pytest
+from pydantic import ValidationError
 
 from kiro.domain.models import GitBookChunk, ScrapingResult
 
@@ -14,7 +17,7 @@ def test_gitbook_chunk_is_frozen():
         content="Antes de começar...",
     )
     assert chunk.char_count == len("Antes de começar...")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         chunk.content = "outro"  # frozen model
 
 
@@ -23,9 +26,9 @@ def test_scraping_result_holds_summary():
         pages_fetched=10,
         chunks_written=42,
         failed_urls=["https://example.com/dead"],
-        output_path="cache.json",
+        output_path=Path("cache.json"),
     )
     assert result.pages_fetched == 10
     assert result.chunks_written == 42
     assert result.failed_urls == ["https://example.com/dead"]
-    assert result.output_path == "cache.json"
+    assert result.output_path == Path("cache.json")

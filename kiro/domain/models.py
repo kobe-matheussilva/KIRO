@@ -1,6 +1,7 @@
 """Modelos de domínio. Imutáveis sempre que possível."""
 
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -138,4 +139,4 @@ class ScrapingResult(BaseModel):
     pages_fetched: int
     chunks_written: int
     failed_urls: list[str]
-    output_path: str
+    output_path: Path
