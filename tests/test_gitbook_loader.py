@@ -3,10 +3,16 @@
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 from pydantic import ValidationError
 
 from kiro.domain.models import GitBookChunk, ScrapingResult
-from kiro.infrastructure.gitbook_loader import _parse_sitemap
+from kiro.infrastructure.gitbook_loader import (
+    _extract_page_title,
+    _find_content_container,
+    _parse_sitemap,
+    _section_anchor,
+)
 
 
 SITEMAP_OK = """<?xml version="1.0" encoding="UTF-8"?>
@@ -94,3 +100,63 @@ def test_sitemap_with_only_external_urls_raises():
 </urlset>"""
     with pytest.raises(ValueError, match="nenhuma URL"):
         _parse_sitemap(xml, base_url="https://kobeapps.gitbook.io/kobe.io-documentacao")
+
+
+def test_find_container_prefers_main():
+    soup = BeautifulSoup(
+        '<html><body><main><h1>X</h1></main></body></html>',
+        "html.parser",
+    )
+    container = _find_content_container(soup)
+    assert container.name == "main"
+
+
+def test_find_container_falls_back_to_testid():
+    soup = BeautifulSoup(
+        '<html><body><div data-testid="page.contentEditor"><h1>X</h1></div></body></html>',
+        "html.parser",
+    )
+    container = _find_content_container(soup)
+    assert container.get("data-testid") == "page.contentEditor"
+
+
+def test_find_container_falls_back_to_article():
+    soup = BeautifulSoup(
+        '<html><body><article><h1>X</h1></article></body></html>',
+        "html.parser",
+    )
+    container = _find_content_container(soup)
+    assert container.name == "article"
+
+
+def test_find_container_returns_none_when_nothing_matches():
+    soup = BeautifulSoup("<html><body><p>x</p></body></html>", "html.parser")
+    assert _find_content_container(soup) is None
+
+
+def test_page_title_from_h1():
+    soup = BeautifulSoup(
+        '<html><head><title>Site</title></head><body><main><h1>Tópico</h1></main></body></html>',
+        "html.parser",
+    )
+    assert _extract_page_title(soup) == "Tópico"
+
+
+def test_page_title_falls_back_to_title_tag():
+    soup = BeautifulSoup(
+        '<html><head><title>Fallback title</title></head><body><main><p>sem h1</p></main></body></html>',
+        "html.parser",
+    )
+    assert _extract_page_title(soup) == "Fallback title"
+
+
+def test_section_anchor_from_heading_id():
+    soup = BeautifulSoup('<h2 id="pre-requisitos">Pré-requisitos</h2>', "html.parser")
+    heading = soup.find("h2")
+    assert _section_anchor(heading) == "pre-requisitos"
+
+
+def test_section_anchor_slugifies_text():
+    soup = BeautifulSoup("<h2>Configurando Notificações Push!</h2>", "html.parser")
+    heading = soup.find("h2")
+    assert _section_anchor(heading) == "configurando-notificacoes-push"
