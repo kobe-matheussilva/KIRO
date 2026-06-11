@@ -500,3 +500,19 @@ def test_scrape_handles_sitemap_index(tmp_path):
     assert result.pages_fetched == 2
     assert result.chunks_written >= 2
     assert result.failed_urls == []
+
+
+def test_chunk_drops_noise_only_section():
+    """Seções com só pontuação são descartadas (não viram chunks)."""
+    html = """
+    <main>
+      <h1>Página</h1>
+      <h2>Seção Boa</h2>
+      <p>Conteúdo real com letras.</p>
+      <h2>Seção Lixo</h2>
+      <p>.</p>
+    </main>
+    """
+    chunks = _chunk_page(html, page_url="https://x.com/p")
+    assert len(chunks) == 1
+    assert chunks[0].section_title == "Seção Boa"

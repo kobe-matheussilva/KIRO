@@ -177,6 +177,15 @@ _CHUNK_MAX_CHARS = 1000
 _CHUNK_TARGET_CHARS = 800
 
 
+def _has_signal(text: str) -> bool:
+    """True se o texto tem pelo menos um caractere alfanumérico.
+
+    Usado pra filtrar chunks-lixo tipo '.', '—', '1', vistos no
+    HTML real da GitBook (parágrafos com só pontuação ou ornament).
+    """
+    return any(c.isalnum() for c in text)
+
+
 def _split_oversized(content: str) -> list[str]:
     """Divide texto > _CHUNK_MAX_CHARS em sub-chunks ≤ ~_CHUNK_TARGET_CHARS.
 
@@ -270,9 +279,11 @@ def _chunk_page(html: str, page_url: str) -> list[GitBookChunk]:
     chunks: list[GitBookChunk] = []
     for title, anchor, paragraphs in sections:
         content = "\n\n".join(paragraphs).strip()
-        if not content:
+        if not _has_signal(content):
             continue
         for sub_content in _split_oversized(content):
+            if not _has_signal(sub_content):
+                continue
             chunks.append(
                 GitBookChunk(
                     page_title=page_title,
