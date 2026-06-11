@@ -17,6 +17,7 @@ from kiro.infrastructure.confluence_client import ConfluenceClient
 from kiro.infrastructure.jira_client import JiraClient
 from kiro.infrastructure.persistence import ArtifactStore
 from kiro.infrastructure.slack_client import SlackClient
+from kiro.infrastructure.gitbook_loader import scrape_public_gitbook
 from kiro.utils.branding import print_banner, print_footer
 from kiro.utils.logging import configure_logging
 from kiro.utils.progress import Narrator
@@ -72,6 +73,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("config-check", help="Valida configuração e encerra.")
+
+    fetch_p = sub.add_parser(
+        "fetch-gitbook",
+        help="Baixa o GitBook e gera cache JSON (RAG).",
+    )
+    source_group = fetch_p.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
+        "--public",
+        action="store_true",
+        help="Baixa a GitBook pública (sem auth).",
+    )
+    fetch_p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Mostra logs detalhados em vez do spinner.",
+    )
     return parser
 
 
@@ -201,6 +218,39 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.info("LLM base_url          = %s", settings.llm_base_url)
         log.info("estratégia cluster    = %s", settings.cluster_strategy)
         return 0
+
+    if args.command == "fetch-gitbook":
+        verbose = getattr(args, "verbose", False)
+        narrator = Narrator(enabled=not verbose)
+        if not verbose:
+            logging.getLogger("kiro").setLevel(logging.ERROR)
+
+        print_banner()
+        narrator.section("GitBook · fetch público")
+
+        try:
+            result = scrape_public_gitbook(
+                base_url=settings.gitbook_public_url,
+                output_path=settings.gitbook_cache_path,
+                narrator=narrator,
+                request_delay_seconds=settings.gitbook_request_delay_seconds,
+            )
+        except ValueError as e:
+            narrator.fail(str(e))
+            return 1
+
+        narrator.done(
+            f"{result.pages_fetched} páginas baixadas, "
+            f"{len(result.failed_urls)} falhas"
+        )
+        narrator.done(
+            f"{result.chunks_written} chunks salvos em {result.output_path}"
+        )
+        if verbose and result.failed_urls:
+            narrator.warn("URLs que falharam:")
+            for url in result.failed_urls:
+                narrator.info(f"  {url}")
+        return 0 if result.chunks_written > 0 else 1
 
     if args.command == "run":
         dry_run = bool(args.dry_run or settings.dry_run)
