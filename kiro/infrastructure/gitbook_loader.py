@@ -8,15 +8,24 @@ retrieval (issue #3). Esse módulo NÃO toca o pipeline de geração.
 import json
 import logging
 import re
+import time
 import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from bs4 import BeautifulSoup, Tag
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
-from kiro.domain.models import GitBookChunk
+from kiro.domain.models import GitBookChunk, ScrapingResult
+from kiro.utils.progress import Narrator
 
 log = logging.getLogger(__name__)
 
@@ -251,4 +260,102 @@ def _write_cache(
     output_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
+    )
+
+
+@retry(
+    retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=8),
+    reraise=True,
+)
+def _fetch_url(client: httpx.Client, url: str) -> str:
+    """GET com retry em 408/429/5xx e timeouts de rede. Retorna text."""
+    resp = client.get(url)
+    if resp.status_code in (408, 429) or resp.status_code >= 500:
+        resp.raise_for_status()  # dispara retry
+    if resp.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"HTTP {resp.status_code}", request=resp.request, response=resp
+        )
+    return resp.text
+
+
+def scrape_public_gitbook(
+    base_url: str,
+    output_path: Path,
+    *,
+    narrator: Optional[Narrator] = None,
+    request_delay_seconds: float = 0.5,
+    timeout_seconds: float = 30.0,
+) -> ScrapingResult:
+    """Baixa a GitBook pública e grava cache JSON.
+
+    Args:
+        base_url: URL raiz da GitBook (ex.: https://kobeapps.gitbook.io/docs).
+        output_path: Caminho do JSON de saída.
+        narrator: Narrator pra spinner; None desabilita.
+        request_delay_seconds: Pausa entre requisições (educação com servidor).
+        timeout_seconds: Timeout por requisição.
+
+    Returns:
+        ScrapingResult com contagens e lista de URLs que falharam.
+
+    Raises:
+        ValueError: sitemap.xml inacessível, inválido ou sem URLs.
+    """
+    output_path = Path(output_path)
+    base_url = base_url.rstrip("/")
+
+    with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+        # 1. Sitemap
+        sitemap_url = f"{base_url}/sitemap.xml"
+        try:
+            sitemap_content = _fetch_url(client, sitemap_url)
+        except httpx.HTTPError as e:
+            raise ValueError(
+                f"sitemap inacessível em {sitemap_url}: {e}. "
+                "Verifique GITBOOK_PUBLIC_URL."
+            ) from e
+
+        urls = _parse_sitemap(sitemap_content, base_url=base_url)
+        log.info("gitbook: %d páginas no sitemap", len(urls))
+        if narrator is not None:
+            narrator.done(f"{len(urls)} páginas encontradas no sitemap")
+
+        # 2. Fetch cada página → chunks
+        all_chunks: list[GitBookChunk] = []
+        failed: list[str] = []
+
+        for index, url in enumerate(urls, start=1):
+            try:
+                if narrator is not None:
+                    with narrator.step(f"baixando {index}/{len(urls)}: {url}"):
+                        html = _fetch_url(client, url)
+                else:
+                    html = _fetch_url(client, url)
+                page_chunks = _chunk_page(html, page_url=url)
+                if not page_chunks:
+                    log.warning("gitbook: 0 chunks gerados pra %s", url)
+                    failed.append(url)
+                else:
+                    all_chunks.extend(page_chunks)
+            except httpx.HTTPError as e:
+                log.warning("gitbook: falha em %s: %s", url, e)
+                failed.append(url)
+            except Exception as e:
+                log.warning("gitbook: erro parseando %s: %s", url, e)
+                failed.append(url)
+
+            if request_delay_seconds > 0 and index < len(urls):
+                time.sleep(request_delay_seconds)
+
+    # 3. Persistir
+    _write_cache(all_chunks, output_path=output_path, base_url=base_url)
+
+    return ScrapingResult(
+        pages_fetched=len(urls) - len(failed),
+        chunks_written=len(all_chunks),
+        failed_urls=failed,
+        output_path=output_path,
     )

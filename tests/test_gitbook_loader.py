@@ -3,7 +3,9 @@
 import json
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 from bs4 import BeautifulSoup
 from pydantic import ValidationError
 
@@ -15,6 +17,7 @@ from kiro.infrastructure.gitbook_loader import (
     _parse_sitemap,
     _section_anchor,
     _write_cache,
+    scrape_public_gitbook,
 )
 
 
@@ -356,3 +359,87 @@ def test_write_cache_creates_parent_dirs(tmp_path):
     out = tmp_path / "nested" / "dir" / "cache.json"
     _write_cache([], output_path=out, base_url="https://x.com")
     assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# T9 — orchestrator + fetch HTTP (respx mocks)
+# ---------------------------------------------------------------------------
+
+_PAGE_HTML = """<html><head><title>X</title></head><body>
+<main>
+  <h1>Configurando push</h1>
+  <h2>Pré-requisitos</h2>
+  <p>Antes de começar, certifique-se de que sua conta Firebase está ativa.</p>
+  <h2>Passos</h2>
+  <p>Passo 1: abra o console.</p>
+  <p>Passo 2: clique em Notifications.</p>
+</main>
+</body></html>"""
+
+_PAGE_404_BODY = "<html><body>404</body></html>"
+
+
+@respx.mock
+def test_sitemap_404_raises(tmp_path):
+    base = "https://example.com/docs"
+    respx.get(f"{base}/sitemap.xml").mock(return_value=httpx.Response(404))
+
+    with pytest.raises(ValueError, match="sitemap"):
+        scrape_public_gitbook(
+            base_url=base,
+            output_path=tmp_path / "cache.json",
+            request_delay_seconds=0,
+        )
+
+
+@respx.mock
+def test_page_404_continues(tmp_path):
+    base = "https://example.com/docs"
+    sitemap = f"""<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>{base}/ok</loc></url>
+  <url><loc>{base}/dead</loc></url>
+</urlset>"""
+    respx.get(f"{base}/sitemap.xml").mock(return_value=httpx.Response(200, text=sitemap))
+    respx.get(f"{base}/ok").mock(return_value=httpx.Response(200, text=_PAGE_HTML))
+    respx.get(f"{base}/dead").mock(return_value=httpx.Response(404, text=_PAGE_404_BODY))
+
+    result = scrape_public_gitbook(
+        base_url=base,
+        output_path=tmp_path / "cache.json",
+        request_delay_seconds=0,
+    )
+
+    assert result.pages_fetched == 1
+    assert result.chunks_written >= 1
+    assert f"{base}/dead" in result.failed_urls
+
+
+@respx.mock
+def test_full_pipeline_with_mocks(tmp_path):
+    base = "https://example.com/docs"
+    sitemap = f"""<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>{base}/intro</loc></url>
+  <url><loc>{base}/setup</loc></url>
+</urlset>"""
+    respx.get(f"{base}/sitemap.xml").mock(return_value=httpx.Response(200, text=sitemap))
+    respx.get(f"{base}/intro").mock(return_value=httpx.Response(200, text=_PAGE_HTML))
+    respx.get(f"{base}/setup").mock(return_value=httpx.Response(200, text=_PAGE_HTML))
+
+    out = tmp_path / "cache.json"
+    result = scrape_public_gitbook(
+        base_url=base,
+        output_path=out,
+        request_delay_seconds=0,
+    )
+
+    assert result.pages_fetched == 2
+    assert result.failed_urls == []
+    assert result.output_path == out
+
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["source"] == "gitbook_public"
+    assert data["base_url"] == base
+    assert len(data["chunks"]) >= 2
+    assert data["chunks"][0]["page_title"] == "Configurando push"
