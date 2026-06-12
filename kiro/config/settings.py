@@ -78,6 +78,18 @@ class Settings(BaseSettings):
     gitbook_rag_top_k: int = Field(default=3, ge=1, le=20)
     gitbook_rag_min_score: float = Field(default=0.1, ge=0.0)
 
+    # ─── Confluence SUP — style reference + dedupe (opcional) ──────
+    # Diferente do GitBook (grounding factual), o SUP serve como style
+    # reference: few-shot pro LLM imitar tom + dedupe contra artigos
+    # já publicados. Política mantida: NUNCA cita URL do SUP no output.
+    confluence_kb_space_key: str = "SUP"
+    confluence_kb_cache_path: Path = Path("kiro/data/confluence_sup_cache.json")
+    confluence_kb_request_delay_seconds: float = Field(default=0.5, ge=0.0)
+    confluence_kb_page_size: int = Field(default=25, ge=1, le=100)
+    enable_confluence_few_shot: bool = False
+    confluence_few_shot_top_k: int = Field(default=2, ge=1, le=5)
+    confluence_dedupe_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+
     # ─── Pipeline ───────────────────────────────────────────────────
     lookback_days: int = Field(default=30, ge=1)
     enable_confluence_publish: bool = False
