@@ -90,6 +90,17 @@ class Settings(BaseSettings):
     confluence_few_shot_top_k: int = Field(default=2, ge=1, le=5)
     confluence_dedupe_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
 
+    # ─── Output linter (opcional) ───────────────────────────────────
+    # Validador determinístico aplicado entre a geração do LLM e o save.
+    # BLOCK = vazamento interno (OPE-XXX, jargão, URLs); WARN = qualidade
+    # mínima. Default OFF — ativar quando confiar; LINTER_BLOCK_MODE
+    # define o tratamento de violações block.
+    enable_output_linter: bool = False
+    # skip = pula cluster com block, segue rodada (recomendado pra V1)
+    # fail = derruba a rodada inteira
+    # warn = salva mesmo com block, só reporta
+    linter_block_mode: Literal["skip", "fail", "warn"] = "skip"
+
     # ─── Pipeline ───────────────────────────────────────────────────
     lookback_days: int = Field(default=30, ge=1)
     enable_confluence_publish: bool = False

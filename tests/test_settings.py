@@ -150,3 +150,29 @@ def test_confluence_dedupe_threshold_rejects_above_one(monkeypatch):
     monkeypatch.setenv("CONFLUENCE_DEDUPE_THRESHOLD", "1.5")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+# ─── Output linter ──────────────────────────────────────────────────
+
+
+def test_linter_defaults_off(monkeypatch):
+    _set_required(monkeypatch)
+    s = Settings(_env_file=None)
+    assert s.enable_output_linter is False
+    assert s.linter_block_mode == "skip"
+
+
+def test_linter_overrides(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("ENABLE_OUTPUT_LINTER", "true")
+    monkeypatch.setenv("LINTER_BLOCK_MODE", "fail")
+    s = Settings(_env_file=None)
+    assert s.enable_output_linter is True
+    assert s.linter_block_mode == "fail"
+
+
+def test_linter_rejects_invalid_block_mode(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("LINTER_BLOCK_MODE", "destroy-everything")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

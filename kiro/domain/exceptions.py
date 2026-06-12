@@ -31,3 +31,7 @@ class LLMResponseError(LLMError):
 
 class ClusteringError(KiroError):
     """Falha ao clusterizar tickets."""
+
+
+class LinterBlocked(KiroError):
+    """Levantada quando LINTER_BLOCK_MODE=fail e o linter bloqueia um draft."""

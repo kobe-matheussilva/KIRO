@@ -41,12 +41,14 @@ def print_footer(
     duration_seconds: float,
     artifacts_dir: str,
     dedupe_matches: Optional[list] = None,
+    lint_blocks: Optional[list] = None,
+    lint_warnings: Optional[list] = None,
 ) -> None:
     """Resumo final humanizado. Mostrado no fim de cada `kiro run`.
 
-    `dedupe_matches` é opcional: lista de `(Cluster, GitBookChunk)` com
-    matches do SUP. Quando presente, é exibido como hint pro revisor
-    "considere atualizar artigo existente" — política firmada na issue #10.
+    `dedupe_matches` (issue #10): clusters com artigo similar em SUP.
+    `lint_blocks` / `lint_warnings` (issue #12): drafts bloqueados ou
+    flagados pelo linter — só aparecem quando o linter está ativo.
     """
     bar = "─" * 50
     print()
@@ -62,6 +64,15 @@ def print_footer(
     print(f"     duração                 : {duration_seconds:>5.1f}s")
     print(f"   {bar}")
     print()
+    if lint_blocks or lint_warnings:
+        n_blocks = len(lint_blocks or [])
+        n_warns = len(lint_warnings or [])
+        print(f"   🛡  Linter: {n_blocks} bloqueado(s), {n_warns} com warning(s)")
+        for cluster, violations in (lint_blocks or [])[:5]:
+            print(f"     ✗ '{cluster.topic[:50]}' — {len(violations)} violação(ões)")
+        for cluster, violations in (lint_warnings or [])[:5]:
+            print(f"     ⚠ '{cluster.topic[:50]}' — {len(violations)} warning(s)")
+        print()
     if dedupe_matches:
         print(f"   ⚠ {len(dedupe_matches)} cluster(s) com artigo similar em SUP — "
               "considere atualizar em vez de criar novo:")

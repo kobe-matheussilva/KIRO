@@ -9,12 +9,15 @@ from typing import Optional
 
 from kiro.application.clustering.base import ClusteringStrategy
 from kiro.application.generation.base import LLMProvider
+from kiro.application.lint import LinterResult, OutputLinter
+from kiro.application.lint_rules import Violation
 from kiro.application.retrieval import KnowledgeRetriever
 from kiro.application.style_reference import StyleReferenceFinder
 from kiro.domain.exceptions import (
     ConfluenceError,
     JiraError,
     KiroError,
+    LinterBlocked,
     LLMError,
     SlackError,
 )
@@ -66,6 +69,10 @@ class PipelineResult:
     # Não impede geração — sinaliza pro revisor "considere atualizar em
     # vez de criar novo" no footer/relatório.
     dedupe_matches: list[tuple[Cluster, GitBookChunk]] = field(default_factory=list)
+    # Drafts bloqueados pelo linter (LINTER_BLOCK_MODE=skip) ou warns
+    # acumulados (issue #12). Block vai pra `errors`; warn vai pra cá.
+    lint_warnings: list[tuple[Cluster, list[Violation]]] = field(default_factory=list)
+    lint_blocks: list[tuple[Cluster, list[Violation]]] = field(default_factory=list)
 
 
 class Pipeline:
@@ -90,6 +97,8 @@ class Pipeline:
         style_finder: Optional[StyleReferenceFinder] = None,
         style_top_k: int = 2,
         dedupe_threshold: float = 0.6,
+        linter: Optional[OutputLinter] = None,
+        linter_block_mode: str = "skip",
     ) -> None:
         self.jira = jira
         self.clustering = clustering
@@ -110,6 +119,8 @@ class Pipeline:
         self.style_finder = style_finder
         self.style_top_k = style_top_k
         self.dedupe_threshold = dedupe_threshold
+        self.linter = linter
+        self.linter_block_mode = linter_block_mode
 
     def run(self, request: PipelineRequest) -> PipelineResult:
         started = datetime.now(timezone.utc)
@@ -199,6 +210,10 @@ class Pipeline:
                         faq = self.llm.generate_customer_faq(
                             cluster, kb_context, style_examples
                         )
+                    lint = self._lint_draft(cluster, faq, result, style="faq")
+                    if lint.is_blocked and self.linter_block_mode == "skip":
+                        # Erro registrado em _lint_draft; pula save
+                        continue
                     self.narrator.done(
                         f'"{faq.title}"  ({len(faq.entries)} perguntas, {cluster.count} tickets)'
                     )
@@ -212,10 +227,17 @@ class Pipeline:
                         article = self.llm.generate_article(
                             cluster, kb_context, style_examples
                         )
+                    lint = self._lint_draft(cluster, article, result, style="artigo")
+                    if lint.is_blocked and self.linter_block_mode == "skip":
+                        continue
                     self.narrator.done(f'"{article.title}"  ({cluster.count} tickets)')
                     result.articles.append((cluster, article))
                     self.store.save_article_markdown(cluster, article)
                     self.store.save_article_docx(cluster, article)
+            except LinterBlocked:
+                # LINTER_BLOCK_MODE=fail — propaga pra abortar a rodada inteira.
+                # Os outros modos (skip/warn) NÃO levantam — fluxo segue normalmente.
+                raise
             except LLMError as e:
                 self.narrator.fail(f"falhei em '{cluster.topic[:50]}' — {e}")
                 log.error("LLM falhou no cluster '%s': %s", cluster.topic, e)
@@ -338,6 +360,67 @@ class Pipeline:
                 cluster.topic, match.page_title,
             )
         return match
+
+    def _lint_draft(
+        self,
+        cluster: Cluster,
+        draft,
+        result: PipelineResult,
+        *,
+        style: str,
+    ) -> LinterResult:
+        """Aplica linter ao draft + registra warns/blocks no result.
+
+        Retorna LinterResult pra o caller decidir se pula o save. Comporta:
+        - linter ausente → result vazio (não bloqueia nada)
+        - warns → registrados em result.lint_warnings (sempre salva)
+        - blocks + mode=fail → levanta LinterBlocked
+        - blocks + mode=skip → registrado em result.errors + result.lint_blocks
+          (caller pula save)
+        - blocks + mode=warn → registrado mas não interfere (salva mesmo assim)
+        """
+        if self.linter is None:
+            return LinterResult()
+        lint = self.linter.check(draft)
+        if lint.warns:
+            result.lint_warnings.append((cluster, list(lint.warns)))
+            log.info(
+                "lint: %d warn(s) no draft '%s'", len(lint.warns), cluster.topic
+            )
+        if not lint.is_blocked:
+            return lint
+
+        result.lint_blocks.append((cluster, list(lint.blocks)))
+        result.errors.append(
+            {
+                "stage": "lint",
+                "style": style,
+                "topic": cluster.topic,
+                "violations": [
+                    f"[{v.field}] {v.message}" for v in lint.blocks
+                ],
+            }
+        )
+        log.warning(
+            "lint: %d block(s) no draft '%s' (mode=%s)",
+            len(lint.blocks), cluster.topic, self.linter_block_mode,
+        )
+        if self.linter_block_mode == "fail":
+            self.narrator.fail(
+                f"linter bloqueou '{cluster.topic[:50]}' "
+                f"({len(lint.blocks)} violações)"
+            )
+            raise LinterBlocked(
+                f"draft '{cluster.topic}' bloqueado pelo linter: "
+                + "; ".join(v.message for v in lint.blocks)
+            )
+        if self.linter_block_mode == "skip":
+            self.narrator.fail(
+                f"linter pulou '{cluster.topic[:50]}' "
+                f"({len(lint.blocks)} violações)"
+            )
+        # mode == "warn": registrou mas não interfere
+        return lint
 
     def _publish_one(
         self,

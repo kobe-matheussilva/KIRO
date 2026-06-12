@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from kiro.application.clustering.heuristic import HeuristicClusteringStrategy
 from kiro.application.generation.factory import build_llm_provider
 from kiro.application.pipeline import OUTPUT_STYLES, STAGES, Pipeline, PipelineRequest
+from kiro.application.lint import build_output_linter
 from kiro.application.retrieval import build_retriever
 from kiro.application.style_reference import build_style_finder
 from kiro.config.settings import Settings
@@ -192,6 +193,9 @@ def _build_pipeline(
         else None
     )
 
+    # Output linter (issue #12). Aplicado entre LLM e save. None quando OFF.
+    linter = build_output_linter(enabled=settings.enable_output_linter)
+
     confluence: Optional[ConfluenceClient] = None
     if settings.confluence_base_url and settings.confluence_space_key:
         confluence = ConfluenceClient(
@@ -230,6 +234,8 @@ def _build_pipeline(
         style_finder=style_finder,
         style_top_k=settings.confluence_few_shot_top_k,
         dedupe_threshold=settings.confluence_dedupe_threshold,
+        linter=linter,
+        linter_block_mode=settings.linter_block_mode,
     )
 
 
@@ -417,6 +423,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             duration_seconds=duration,
             artifacts_dir=artifacts_dir,
             dedupe_matches=result.dedupe_matches,
+            lint_blocks=result.lint_blocks,
+            lint_warnings=result.lint_warnings,
         )
         return 0 if not result.errors else 1
 
