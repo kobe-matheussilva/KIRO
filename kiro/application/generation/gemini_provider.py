@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from typing import Sequence
 
 import httpx
 from pydantic import ValidationError as PydanticValidationError
@@ -14,8 +15,9 @@ from tenacity import (
 )
 
 from kiro.application.generation.base import LLMProvider
+from kiro.application.generation.kb_context import format_kb_context_block
 from kiro.domain.exceptions import LLMError, LLMResponseError
-from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ
+from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, GitBookChunk
 
 log = logging.getLogger(__name__)
 
@@ -52,13 +54,21 @@ class GeminiProvider(LLMProvider):
         self._temperature = temperature
         self._timeout = timeout_seconds
 
-    def generate_article(self, cluster: Cluster) -> ArticleDraft:
-        prompt = self._build_prompt(cluster)
+    def generate_article(
+        self,
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> ArticleDraft:
+        prompt = self._build_prompt(cluster, kb_context)
         raw = self._safe_call(prompt)
         return self._parse_response(raw)
 
-    def generate_customer_faq(self, cluster: Cluster) -> CustomerFAQ:
-        prompt = self._build_customer_faq_prompt(cluster)
+    def generate_customer_faq(
+        self,
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> CustomerFAQ:
+        prompt = self._build_customer_faq_prompt(cluster, kb_context)
         raw = self._safe_call(prompt)
         return self._parse_customer_faq_response(raw)
 
@@ -146,7 +156,10 @@ class GeminiProvider(LLMProvider):
         return text
 
     @staticmethod
-    def _build_prompt(cluster: Cluster) -> str:
+    def _build_prompt(
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> str:
         summaries = "\n".join(f"- {s}" for s in cluster.summaries) or "(nenhum)"
         labels = ", ".join(cluster.labels) or "nenhuma"
         components = ", ".join(cluster.components) or "não identificados"
@@ -156,6 +169,7 @@ class GeminiProvider(LLMProvider):
             descriptions_block = (
                 "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
             )
+        kb_block = format_kb_context_block(kb_context)
         return f"""Você está escrevendo um artigo de documentação para o varejista (cliente B2B da Kobe — Amaro, Mr. Cat, Zaffari, Epharma, etc.) ler e se auto-resolver SEM precisar abrir chamado de suporte.
 
 Esse artigo será publicado no Confluence público da Kobe e lido pelas equipes de produto/operação do varejista. O leitor NÃO tem nenhum contexto interno da Kobe.
@@ -176,7 +190,7 @@ Descrições detalhadas (até 3 tickets com mais conteúdo):
 ─────────────────────────────────────────────────────────────
 {descriptions_block}
 ─────────────────────────────────────────────────────────────
-
+{kb_block}
 ═══════════════════════════════════════════════════════════════
 PROIBIÇÕES ABSOLUTAS — vazar isso quebra a confiança do cliente
 ═══════════════════════════════════════════════════════════════
@@ -246,7 +260,10 @@ deve seguir essa SEMÂNTICA EXTERNA:
             raise LLMResponseError(f"JSON do Gemini não satisfaz o schema: {e}") from e
 
     @staticmethod
-    def _build_customer_faq_prompt(cluster: Cluster) -> str:
+    def _build_customer_faq_prompt(
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> str:
         summaries = "\n".join(f"- {s}" for s in cluster.summaries) or "(nenhum)"
         labels = ", ".join(cluster.labels) or "nenhuma"
         components = ", ".join(cluster.components) or "não identificados"
@@ -256,6 +273,7 @@ deve seguir essa SEMÂNTICA EXTERNA:
             descriptions_block = (
                 "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
             )
+        kb_block = format_kb_context_block(kb_context)
         return f"""Você é especialista em escrever FAQs self-service para clientes B2B da Kobe — empresa que desenvolve aplicativos móveis para grandes varejistas brasileiros (Amaro, Mr. Cat, Zaffari, Epharma, etc.).
 
 Sua tarefa: gerar um documento de Perguntas Frequentes que **o time de produto/operação do varejista** possa consultar ANTES de abrir um chamado de suporte. Ou seja, escrever conteúdo que o cliente leia e se resolva sozinho.
@@ -276,7 +294,7 @@ Descrições detalhadas (até 3 tickets com mais conteúdo):
 ─────────────────────────────────────────────────────────────
 {descriptions_block}
 ─────────────────────────────────────────────────────────────
-
+{kb_block}
 ═══════════════════════════════════════════════════════════════
 QUEM É O LEITOR (importante)
 ═══════════════════════════════════════════════════════════════

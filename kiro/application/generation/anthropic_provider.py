@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from typing import Sequence
 
 import httpx
 from pydantic import ValidationError as PydanticValidationError
@@ -14,8 +15,9 @@ from tenacity import (
 )
 
 from kiro.application.generation.base import LLMProvider
+from kiro.application.generation.kb_context import format_kb_context_block
 from kiro.domain.exceptions import LLMError, LLMResponseError
-from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ
+from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, GitBookChunk
 
 log = logging.getLogger(__name__)
 
@@ -51,13 +53,21 @@ class AnthropicProvider(LLMProvider):
         self._temperature = temperature
         self._timeout = timeout_seconds
 
-    def generate_article(self, cluster: Cluster) -> ArticleDraft:
-        prompt = self._build_prompt(cluster)
+    def generate_article(
+        self,
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> ArticleDraft:
+        prompt = self._build_prompt(cluster, kb_context)
         raw = self._safe_call(prompt)
         return self._parse_response(raw)
 
-    def generate_customer_faq(self, cluster: Cluster) -> CustomerFAQ:
-        prompt = self._build_customer_faq_prompt(cluster)
+    def generate_customer_faq(
+        self,
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> CustomerFAQ:
+        prompt = self._build_customer_faq_prompt(cluster, kb_context)
         raw = self._safe_call(prompt)
         return self._parse_customer_faq_response(raw)
 
@@ -109,7 +119,10 @@ class AnthropicProvider(LLMProvider):
             raise LLMResponseError(f"resposta Anthropic em formato inesperado: {e}") from e
 
     @staticmethod
-    def _build_prompt(cluster: Cluster) -> str:
+    def _build_prompt(
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> str:
         summaries = "\n".join(f"- {s}" for s in cluster.summaries) or "(nenhum)"
         labels = ", ".join(cluster.labels) or "nenhuma"
         components = ", ".join(cluster.components) or "não identificados"
@@ -119,6 +132,7 @@ class AnthropicProvider(LLMProvider):
             descriptions_block = (
                 "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
             )
+        kb_block = format_kb_context_block(kb_context)
         return f"""Você é um especialista em documentação técnica de suporte ao cliente da Kobe — empresa que desenvolve aplicativos móveis (iOS e Android) para grandes varejistas brasileiros (ex.: Amaro, Mr. Cat, Zaffari, Epharma).
 
 Sua tarefa: produzir um artigo de Base de Conhecimento **acertivo, específico e acionável**, em português do Brasil, a partir de tickets reais de suporte agrupados por similaridade.
@@ -139,7 +153,7 @@ Descrições detalhadas (até 3 tickets com mais conteúdo):
 ─────────────────────────────────────────────────────────────
 {descriptions_block}
 ─────────────────────────────────────────────────────────────
-
+{kb_block}
 ═══════════════════════════════════════════════════════════════
 DIRETRIZES OBRIGATÓRIAS — leia antes de escrever
 ═══════════════════════════════════════════════════════════════
@@ -201,11 +215,14 @@ Responda APENAS com JSON válido, sem markdown, sem texto adicional. Estrutura:
             raise LLMResponseError(f"JSON Anthropic não satisfaz o schema: {e}") from e
 
     @staticmethod
-    def _build_customer_faq_prompt(cluster: Cluster) -> str:
+    def _build_customer_faq_prompt(
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> str:
         # Mesmo prompt do Gemini — o conteúdo é agnostic de provedor.
         # Importamos lazy pra evitar dependência circular sutil entre os arquivos.
         from kiro.application.generation.gemini_provider import GeminiProvider
-        return GeminiProvider._build_customer_faq_prompt(cluster)
+        return GeminiProvider._build_customer_faq_prompt(cluster, kb_context)
 
     @staticmethod
     def _parse_customer_faq_response(raw: str) -> CustomerFAQ:

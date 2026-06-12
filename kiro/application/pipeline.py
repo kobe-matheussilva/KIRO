@@ -9,6 +9,7 @@ from typing import Optional
 
 from kiro.application.clustering.base import ClusteringStrategy
 from kiro.application.generation.base import LLMProvider
+from kiro.application.retrieval import KnowledgeRetriever
 from kiro.domain.exceptions import (
     ConfluenceError,
     JiraError,
@@ -71,6 +72,9 @@ class Pipeline:
         llm_request_delay_seconds: float = 0.0,
         narrator: Optional[Narrator] = None,
         cluster_top_n: int = 10,
+        retriever: Optional[KnowledgeRetriever] = None,
+        rag_top_k: int = 3,
+        rag_min_score: float = 0.1,
     ) -> None:
         self.jira = jira
         self.clustering = clustering
@@ -85,6 +89,9 @@ class Pipeline:
         self.llm_request_delay_seconds = max(0.0, llm_request_delay_seconds)
         self.narrator = narrator or Narrator(enabled=False)
         self.cluster_top_n = cluster_top_n
+        self.retriever = retriever
+        self.rag_top_k = rag_top_k
+        self.rag_min_score = rag_min_score
 
     def run(self, request: PipelineRequest) -> PipelineResult:
         started = datetime.now(timezone.utc)
@@ -161,12 +168,13 @@ class Pipeline:
                     f"aguardando {effective_delay:.0f}s para respeitar rate limit do LLM..."
                 ):
                     time.sleep(effective_delay)
+            kb_context = self._fetch_kb_context(cluster)
             try:
                 if style == "faq":
                     with self.narrator.step(
                         f"redigindo FAQ sobre '{cluster.topic[:60]}'..."
                     ):
-                        faq = self.llm.generate_customer_faq(cluster)
+                        faq = self.llm.generate_customer_faq(cluster, kb_context)
                     self.narrator.done(
                         f'"{faq.title}"  ({len(faq.entries)} perguntas, {cluster.count} tickets)'
                     )
@@ -177,7 +185,7 @@ class Pipeline:
                     with self.narrator.step(
                         f"redigindo Artigo sobre '{cluster.topic[:60]}'..."
                     ):
-                        article = self.llm.generate_article(cluster)
+                        article = self.llm.generate_article(cluster, kb_context)
                     self.narrator.done(f'"{article.title}"  ({cluster.count} tickets)')
                     result.articles.append((cluster, article))
                     self.store.save_article_markdown(cluster, article)
@@ -238,6 +246,30 @@ class Pipeline:
             result.errors.append({"stage": "notify", "error": str(e)})
 
     # ────────────────────── helpers ───────────────────────────
+
+    def _fetch_kb_context(self, cluster: Cluster) -> list:
+        """Retorna chunks GitBook relevantes ou lista vazia.
+
+        Falhas (retriever ausente, sem matches, exceção inesperada) NUNCA
+        derrubam a geração — RAG é grounding opcional e o artigo deve sair
+        de qualquer forma. Erros viram warning.
+        """
+        if self.retriever is None:
+            return []
+        try:
+            chunks = self.retriever.find_relevant(
+                cluster,
+                top_k=self.rag_top_k,
+                min_score=self.rag_min_score,
+            )
+        except Exception as e:  # noqa: BLE001 — RAG nunca pode derrubar geração
+            log.warning("retrieval falhou pro cluster '%s': %s", cluster.topic, e)
+            return []
+        if chunks:
+            log.info(
+                "RAG: %d chunks injetados pro cluster '%s'", len(chunks), cluster.topic
+            )
+        return chunks
 
     def _publish_one(
         self,

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from kiro.application.clustering.heuristic import HeuristicClusteringStrategy
 from kiro.application.generation.factory import build_llm_provider
 from kiro.application.pipeline import OUTPUT_STYLES, STAGES, Pipeline, PipelineRequest
+from kiro.application.retrieval import build_retriever
 from kiro.config.settings import Settings
 from kiro.domain.exceptions import ConfigError
 from kiro.infrastructure.confluence_client import ConfluenceClient
@@ -156,6 +157,15 @@ def _build_pipeline(
 
     llm = build_llm_provider(settings, dry_run=dry_run)
 
+    # RAG GitBook: só ativa se o usuário ligou o flag E o cache existe.
+    # Cache ausente → build_retriever retorna None e o pipeline segue sem
+    # RAG (decisão deliberada: não derrubar geração por falta de grounding).
+    retriever = (
+        build_retriever(settings.gitbook_cache_path)
+        if settings.enable_gitbook_rag
+        else None
+    )
+
     confluence: Optional[ConfluenceClient] = None
     if settings.confluence_base_url and settings.confluence_space_key:
         confluence = ConfluenceClient(
@@ -188,6 +198,9 @@ def _build_pipeline(
         llm_request_delay_seconds=settings.llm_request_delay_seconds,
         narrator=narrator,
         cluster_top_n=settings.cluster_top_n,
+        retriever=retriever,
+        rag_top_k=settings.gitbook_rag_top_k,
+        rag_min_score=settings.gitbook_rag_min_score,
     )
 
 

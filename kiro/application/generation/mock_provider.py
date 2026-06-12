@@ -1,9 +1,17 @@
 """Mock provider — não chama API real. Usado em dry-run para demo sem custo."""
 
 import logging
+from typing import Sequence
 
 from kiro.application.generation.base import LLMProvider
-from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, FAQEntry, FAQItem
+from kiro.domain.models import (
+    ArticleDraft,
+    Cluster,
+    CustomerFAQ,
+    FAQEntry,
+    FAQItem,
+    GitBookChunk,
+)
 
 log = logging.getLogger(__name__)
 
@@ -13,9 +21,16 @@ class MockLLMProvider(LLMProvider):
 
     Nenhuma chamada externa. Garante que `--dry-run` não consuma quota da API real
     e que a demo local seja reprodutível e gratuita.
+
+    Aceita `kb_context` por contrato da interface, mas IGNORA — o output mock é
+    derivado só do cluster, sem injeção de chunks.
     """
 
-    def generate_article(self, cluster: Cluster) -> ArticleDraft:
+    def generate_article(
+        self,
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> ArticleDraft:
         log.info(
             "MOCK LLM: gerando draft KB interno para cluster '%s' (%d tickets)",
             cluster.topic,
@@ -52,7 +67,11 @@ class MockLLMProvider(LLMProvider):
             tags=tags,
         )
 
-    def generate_customer_faq(self, cluster: Cluster) -> CustomerFAQ:
+    def generate_customer_faq(
+        self,
+        cluster: Cluster,
+        kb_context: Sequence[GitBookChunk] = (),
+    ) -> CustomerFAQ:
         log.info(
             "MOCK LLM: gerando FAQ B2B para cluster '%s' (%d tickets)",
             cluster.topic,

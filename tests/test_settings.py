@@ -83,3 +83,29 @@ def test_gitbook_overrides(monkeypatch):
     assert s.gitbook_public_url == "https://example.com/docs"
     assert str(s.gitbook_cache_path) == "/tmp/cache.json"
     assert s.gitbook_request_delay_seconds == 1.5
+
+
+def test_gitbook_rag_defaults_off(monkeypatch):
+    _set_required(monkeypatch)
+    s = Settings(_env_file=None)
+    assert s.enable_gitbook_rag is False
+    assert s.gitbook_rag_top_k == 3
+    assert s.gitbook_rag_min_score == 0.1
+
+
+def test_gitbook_rag_overrides(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("ENABLE_GITBOOK_RAG", "true")
+    monkeypatch.setenv("GITBOOK_RAG_TOP_K", "5")
+    monkeypatch.setenv("GITBOOK_RAG_MIN_SCORE", "0.25")
+    s = Settings(_env_file=None)
+    assert s.enable_gitbook_rag is True
+    assert s.gitbook_rag_top_k == 5
+    assert s.gitbook_rag_min_score == 0.25
+
+
+def test_gitbook_rag_top_k_rejects_zero(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("GITBOOK_RAG_TOP_K", "0")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

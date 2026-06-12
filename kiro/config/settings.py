@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     gitbook_public_url: str = "https://kobeapps.gitbook.io/kobe.io-documentacao"
     gitbook_cache_path: Path = Path("kiro/data/gitbook_public_cache.json")
     gitbook_request_delay_seconds: float = Field(default=0.5, ge=0.0)
+    # Quando True, o pipeline carrega o cache e injeta chunks relevantes no prompt.
+    # Default False: sem cache existente, comportamento é idêntico ao pré-V1.1.
+    enable_gitbook_rag: bool = False
+    gitbook_rag_top_k: int = Field(default=3, ge=1, le=20)
+    gitbook_rag_min_score: float = Field(default=0.1, ge=0.0)
 
     # ─── Pipeline ───────────────────────────────────────────────────
     lookback_days: int = Field(default=30, ge=1)
