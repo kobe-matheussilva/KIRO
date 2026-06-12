@@ -10,6 +10,7 @@ from typing import Optional
 from kiro.application.clustering.base import ClusteringStrategy
 from kiro.application.generation.base import LLMProvider
 from kiro.application.retrieval import KnowledgeRetriever
+from kiro.application.style_reference import StyleReferenceFinder
 from kiro.domain.exceptions import (
     ConfluenceError,
     JiraError,
@@ -17,7 +18,14 @@ from kiro.domain.exceptions import (
     LLMError,
     SlackError,
 )
-from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, PublishResult, Ticket
+from kiro.domain.models import (
+    ArticleDraft,
+    Cluster,
+    CustomerFAQ,
+    GitBookChunk,
+    PublishResult,
+    Ticket,
+)
 from kiro.infrastructure.confluence_client import ConfluenceClient
 from kiro.infrastructure.jira_client import JiraClient
 from kiro.infrastructure.persistence import ArtifactStore
@@ -54,6 +62,10 @@ class PipelineResult:
     publish_results: list[PublishResult] = field(default_factory=list)
     errors: list[dict] = field(default_factory=list)
     artifacts_dir: Optional[Path] = None
+    # Clusters cujo tópico bateu com artigo já publicado no SUP (issue #10).
+    # Não impede geração — sinaliza pro revisor "considere atualizar em
+    # vez de criar novo" no footer/relatório.
+    dedupe_matches: list[tuple[Cluster, GitBookChunk]] = field(default_factory=list)
 
 
 class Pipeline:
@@ -75,6 +87,9 @@ class Pipeline:
         retriever: Optional[KnowledgeRetriever] = None,
         rag_top_k: int = 3,
         rag_min_score: float = 0.1,
+        style_finder: Optional[StyleReferenceFinder] = None,
+        style_top_k: int = 2,
+        dedupe_threshold: float = 0.6,
     ) -> None:
         self.jira = jira
         self.clustering = clustering
@@ -92,6 +107,9 @@ class Pipeline:
         self.retriever = retriever
         self.rag_top_k = rag_top_k
         self.rag_min_score = rag_min_score
+        self.style_finder = style_finder
+        self.style_top_k = style_top_k
+        self.dedupe_threshold = dedupe_threshold
 
     def run(self, request: PipelineRequest) -> PipelineResult:
         started = datetime.now(timezone.utc)
@@ -169,12 +187,18 @@ class Pipeline:
                 ):
                     time.sleep(effective_delay)
             kb_context = self._fetch_kb_context(cluster)
+            style_examples = self._fetch_style_examples(cluster)
+            dedupe_match = self._fetch_dedupe_match(cluster)
+            if dedupe_match is not None:
+                result.dedupe_matches.append((cluster, dedupe_match))
             try:
                 if style == "faq":
                     with self.narrator.step(
                         f"redigindo FAQ sobre '{cluster.topic[:60]}'..."
                     ):
-                        faq = self.llm.generate_customer_faq(cluster, kb_context)
+                        faq = self.llm.generate_customer_faq(
+                            cluster, kb_context, style_examples
+                        )
                     self.narrator.done(
                         f'"{faq.title}"  ({len(faq.entries)} perguntas, {cluster.count} tickets)'
                     )
@@ -185,7 +209,9 @@ class Pipeline:
                     with self.narrator.step(
                         f"redigindo Artigo sobre '{cluster.topic[:60]}'..."
                     ):
-                        article = self.llm.generate_article(cluster, kb_context)
+                        article = self.llm.generate_article(
+                            cluster, kb_context, style_examples
+                        )
                     self.narrator.done(f'"{article.title}"  ({cluster.count} tickets)')
                     result.articles.append((cluster, article))
                     self.store.save_article_markdown(cluster, article)
@@ -270,6 +296,48 @@ class Pipeline:
                 "RAG: %d chunks injetados pro cluster '%s'", len(chunks), cluster.topic
             )
         return chunks
+
+    def _fetch_style_examples(self, cluster: Cluster) -> list:
+        """Retorna chunks SUP pra few-shot — vazio se finder ausente.
+
+        Mesma política do retrieval: erros NUNCA derrubam geração.
+        """
+        if self.style_finder is None:
+            return []
+        try:
+            examples = self.style_finder.find_similar(
+                cluster, top_k=self.style_top_k
+            )
+        except Exception as e:  # noqa: BLE001 — few-shot é opcional
+            log.warning("style finder falhou pro cluster '%s': %s", cluster.topic, e)
+            return []
+        if examples:
+            log.info(
+                "few-shot: %d exemplos injetados pro cluster '%s'",
+                len(examples), cluster.topic,
+            )
+        return examples
+
+    def _fetch_dedupe_match(self, cluster: Cluster) -> Optional[GitBookChunk]:
+        """Retorna chunk SUP único acima do threshold ou None.
+
+        NÃO impede geração — é apenas sinal pra revisor. Falhas viram warning.
+        """
+        if self.style_finder is None:
+            return None
+        try:
+            match = self.style_finder.find_dedupe_match(
+                cluster, threshold=self.dedupe_threshold
+            )
+        except Exception as e:  # noqa: BLE001 — dedupe é opcional
+            log.warning("dedupe falhou pro cluster '%s': %s", cluster.topic, e)
+            return None
+        if match is not None:
+            log.info(
+                "dedupe: cluster '%s' bate com artigo '%s' em SUP",
+                cluster.topic, match.page_title,
+            )
+        return match
 
     def _publish_one(
         self,

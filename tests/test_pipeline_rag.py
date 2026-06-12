@@ -30,6 +30,7 @@ class _CapturingLLM(LLMProvider):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> ArticleDraft:
         self.last_kb_context = kb_context
         return ArticleDraft(
@@ -40,6 +41,7 @@ class _CapturingLLM(LLMProvider):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> CustomerFAQ:
         self.last_kb_context = kb_context
         return CustomerFAQ(

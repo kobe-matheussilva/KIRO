@@ -69,3 +69,72 @@ def test_main_prints_to_stderr_on_sitemap_error_in_verbose(monkeypatch, tmp_path
     assert rc == 1
     captured = capsys.readouterr()
     assert "sitemap inacessível" in captured.err
+
+
+# ─── fetch-confluence-kb ────────────────────────────────────────────
+
+
+def test_parser_aceita_fetch_confluence_kb(monkeypatch):
+    parser = build_parser()
+    args = parser.parse_args(["fetch-confluence-kb"])
+    assert args.command == "fetch-confluence-kb"
+    assert args.space is None  # default usa settings
+
+
+def test_parser_aceita_space_override(monkeypatch):
+    parser = build_parser()
+    args = parser.parse_args(["fetch-confluence-kb", "--space", "DOCS"])
+    assert args.space == "DOCS"
+
+
+def test_main_dispatches_to_confluence_scraper(monkeypatch, tmp_path):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://x.atlassian.net/wiki")
+    monkeypatch.setenv("CONFLUENCE_KB_CACHE_PATH", str(tmp_path / "sup_cache.json"))
+
+    with patch("kiro.interfaces.cli.print_banner"), patch(
+        "kiro.interfaces.cli.scrape_confluence_kb"
+    ) as mock_scrape:
+        mock_scrape.return_value = ScrapingResult(
+            pages_fetched=5,
+            chunks_written=15,
+            failed_urls=[],
+            output_path=tmp_path / "sup_cache.json",
+        )
+
+        rc = main(["fetch-confluence-kb"])
+
+    assert rc == 0
+    assert mock_scrape.called
+    kwargs = mock_scrape.call_args.kwargs
+    assert kwargs["space_key"] == "SUP"
+    assert kwargs["base_url"] == "https://x.atlassian.net/wiki"
+
+
+def test_main_uses_space_override(monkeypatch, tmp_path):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://x.atlassian.net/wiki")
+    monkeypatch.setenv("CONFLUENCE_KB_CACHE_PATH", str(tmp_path / "sup_cache.json"))
+
+    with patch("kiro.interfaces.cli.print_banner"), patch(
+        "kiro.interfaces.cli.scrape_confluence_kb"
+    ) as mock_scrape:
+        mock_scrape.return_value = ScrapingResult(
+            pages_fetched=1, chunks_written=2, failed_urls=[],
+            output_path=tmp_path / "x.json",
+        )
+        rc = main(["fetch-confluence-kb", "--space", "DOCS"])
+
+    assert rc == 0
+    assert mock_scrape.call_args.kwargs["space_key"] == "DOCS"
+
+
+def test_main_fails_without_confluence_base_url(monkeypatch, tmp_path, capsys):
+    _set_required(monkeypatch)
+    # Anula CONFLUENCE_BASE_URL — string vazia simula "não configurado".
+    # (monkeypatch.delenv não impede o .env do projeto de prover o valor.)
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "")
+    rc = main(["fetch-confluence-kb"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "CONFLUENCE_BASE_URL" in captured.err

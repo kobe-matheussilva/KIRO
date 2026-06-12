@@ -30,6 +30,7 @@ class MockLLMProvider(LLMProvider):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> ArticleDraft:
         log.info(
             "MOCK LLM: gerando draft KB interno para cluster '%s' (%d tickets)",
@@ -71,6 +72,7 @@ class MockLLMProvider(LLMProvider):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> CustomerFAQ:
         log.info(
             "MOCK LLM: gerando FAQ B2B para cluster '%s' (%d tickets)",

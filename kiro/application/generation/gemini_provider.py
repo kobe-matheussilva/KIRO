@@ -16,6 +16,7 @@ from tenacity import (
 
 from kiro.application.generation.base import LLMProvider
 from kiro.application.generation.kb_context import format_kb_context_block
+from kiro.application.generation.style_examples import format_style_examples_block
 from kiro.domain.exceptions import LLMError, LLMResponseError
 from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, GitBookChunk
 
@@ -58,8 +59,9 @@ class GeminiProvider(LLMProvider):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> ArticleDraft:
-        prompt = self._build_prompt(cluster, kb_context)
+        prompt = self._build_prompt(cluster, kb_context, style_examples)
         raw = self._safe_call(prompt)
         return self._parse_response(raw)
 
@@ -67,8 +69,9 @@ class GeminiProvider(LLMProvider):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> CustomerFAQ:
-        prompt = self._build_customer_faq_prompt(cluster, kb_context)
+        prompt = self._build_customer_faq_prompt(cluster, kb_context, style_examples)
         raw = self._safe_call(prompt)
         return self._parse_customer_faq_response(raw)
 
@@ -159,6 +162,7 @@ class GeminiProvider(LLMProvider):
     def _build_prompt(
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> str:
         summaries = "\n".join(f"- {s}" for s in cluster.summaries) or "(nenhum)"
         labels = ", ".join(cluster.labels) or "nenhuma"
@@ -170,6 +174,7 @@ class GeminiProvider(LLMProvider):
                 "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
             )
         kb_block = format_kb_context_block(kb_context)
+        style_block = format_style_examples_block(style_examples)
         return f"""Você está escrevendo um artigo de documentação para o varejista (cliente B2B da Kobe — Amaro, Mr. Cat, Zaffari, Epharma, etc.) ler e se auto-resolver SEM precisar abrir chamado de suporte.
 
 Esse artigo será publicado no Confluence público da Kobe e lido pelas equipes de produto/operação do varejista. O leitor NÃO tem nenhum contexto interno da Kobe.
@@ -224,7 +229,7 @@ DIRETRIZES POSITIVAS
 
 6. A FAQ aborda perguntas que aparecem REALMENTE nos tickets — reformuladas
    como o varejista perguntaria, não como o suporte interno descreve.
-
+{style_block}
 ═══════════════════════════════════════════════════════════════
 FORMATO DE RESPOSTA — JSON válido, sem markdown
 ═══════════════════════════════════════════════════════════════
@@ -263,6 +268,7 @@ deve seguir essa SEMÂNTICA EXTERNA:
     def _build_customer_faq_prompt(
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> str:
         summaries = "\n".join(f"- {s}" for s in cluster.summaries) or "(nenhum)"
         labels = ", ".join(cluster.labels) or "nenhuma"
@@ -274,6 +280,7 @@ deve seguir essa SEMÂNTICA EXTERNA:
                 "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
             )
         kb_block = format_kb_context_block(kb_context)
+        style_block = format_style_examples_block(style_examples)
         return f"""Você é especialista em escrever FAQs self-service para clientes B2B da Kobe — empresa que desenvolve aplicativos móveis para grandes varejistas brasileiros (Amaro, Mr. Cat, Zaffari, Epharma, etc.).
 
 Sua tarefa: gerar um documento de Perguntas Frequentes que **o time de produto/operação do varejista** possa consultar ANTES de abrir um chamado de suporte. Ou seja, escrever conteúdo que o cliente leia e se resolva sozinho.
@@ -331,7 +338,7 @@ DIRETRIZES OBRIGATÓRIAS
 5. INTRO do documento (campo `intro`): 2-3 frases dizendo qual é o tópico e a quem se destina.
 
 6. MÍNIMO 5 entries. IDEAL 7-10.
-
+{style_block}
 ═══════════════════════════════════════════════════════════════
 FORMATO DE RESPOSTA
 ═══════════════════════════════════════════════════════════════

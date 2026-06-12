@@ -12,9 +12,11 @@ from kiro.application.clustering.heuristic import HeuristicClusteringStrategy
 from kiro.application.generation.factory import build_llm_provider
 from kiro.application.pipeline import OUTPUT_STYLES, STAGES, Pipeline, PipelineRequest
 from kiro.application.retrieval import build_retriever
+from kiro.application.style_reference import build_style_finder
 from kiro.config.settings import Settings
 from kiro.domain.exceptions import ConfigError
 from kiro.infrastructure.confluence_client import ConfluenceClient
+from kiro.infrastructure.confluence_kb_loader import scrape_confluence_kb
 from kiro.infrastructure.gitbook_loader import scrape_public_gitbook
 from kiro.infrastructure.jira_client import JiraClient
 from kiro.infrastructure.persistence import ArtifactStore
@@ -86,6 +88,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Baixa a GitBook pública (sem auth).",
     )
     fetch_p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Mostra logs detalhados em vez do spinner.",
+    )
+
+    kb_p = sub.add_parser(
+        "fetch-confluence-kb",
+        help="Baixa o space SUP do Confluence e gera cache JSON (style reference).",
+    )
+    kb_p.add_argument(
+        "--space",
+        type=str,
+        default=None,
+        help="Override do space key (default: CONFLUENCE_KB_SPACE_KEY).",
+    )
+    kb_p.add_argument(
         "--verbose",
         action="store_true",
         help="Mostra logs detalhados em vez do spinner.",
@@ -166,6 +184,14 @@ def _build_pipeline(
         else None
     )
 
+    # Style ref Confluence SUP: same pattern. Sem cache → finder None → pipeline
+    # segue sem few-shot e sem dedupe (geração ainda funciona normal).
+    style_finder = (
+        build_style_finder(settings.confluence_kb_cache_path)
+        if settings.enable_confluence_few_shot
+        else None
+    )
+
     confluence: Optional[ConfluenceClient] = None
     if settings.confluence_base_url and settings.confluence_space_key:
         confluence = ConfluenceClient(
@@ -201,6 +227,9 @@ def _build_pipeline(
         retriever=retriever,
         rag_top_k=settings.gitbook_rag_top_k,
         rag_min_score=settings.gitbook_rag_min_score,
+        style_finder=style_finder,
+        style_top_k=settings.confluence_few_shot_top_k,
+        dedupe_threshold=settings.confluence_dedupe_threshold,
     )
 
 
@@ -256,6 +285,55 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         narrator.done(
             f"{result.pages_fetched} páginas baixadas, "
+            f"{len(result.failed_urls)} falhas"
+        )
+        narrator.done(
+            f"{result.chunks_written} chunks salvos em {result.output_path}"
+        )
+        if verbose and result.failed_urls:
+            narrator.warn("URLs que falharam:")
+            for url in result.failed_urls:
+                narrator.info(f"  {url}")
+        return 0 if result.chunks_written > 0 else 1
+
+    if args.command == "fetch-confluence-kb":
+        verbose = getattr(args, "verbose", False)
+        narrator = Narrator(enabled=not verbose)
+        if not verbose:
+            logging.getLogger("kiro").setLevel(logging.ERROR)
+
+        if not settings.confluence_base_url:
+            print(
+                "[kiro] CONFLUENCE_BASE_URL não configurado — defina no .env",
+                file=sys.stderr,
+            )
+            return 2
+
+        space_key = args.space or settings.confluence_kb_space_key
+        print_banner()
+        narrator.section(f"Confluence · fetch space {space_key}")
+
+        try:
+            result = scrape_confluence_kb(
+                base_url=settings.confluence_base_url,
+                user_email=settings.jira_user_email,
+                api_token=settings.jira_api_token.get_secret_value(),
+                space_key=space_key,
+                output_path=settings.confluence_kb_cache_path,
+                narrator=narrator,
+                request_delay_seconds=settings.confluence_kb_request_delay_seconds,
+                page_size=settings.confluence_kb_page_size,
+            )
+        except Exception as e:  # noqa: BLE001 — devolve mensagem amigável
+            narrator.fail(str(e))
+            if verbose:
+                log.exception("scrape_confluence_kb falhou")
+            else:
+                print(f"[kiro] erro: {e}", file=sys.stderr)
+            return 1
+
+        narrator.done(
+            f"{result.pages_fetched} páginas válidas baixadas, "
             f"{len(result.failed_urls)} falhas"
         )
         narrator.done(
@@ -338,6 +416,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             errors=len(result.errors),
             duration_seconds=duration,
             artifacts_dir=artifacts_dir,
+            dedupe_matches=result.dedupe_matches,
         )
         return 0 if not result.errors else 1
 

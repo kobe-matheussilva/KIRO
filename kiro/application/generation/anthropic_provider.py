@@ -16,6 +16,7 @@ from tenacity import (
 
 from kiro.application.generation.base import LLMProvider
 from kiro.application.generation.kb_context import format_kb_context_block
+from kiro.application.generation.style_examples import format_style_examples_block
 from kiro.domain.exceptions import LLMError, LLMResponseError
 from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, GitBookChunk
 
@@ -57,8 +58,9 @@ class AnthropicProvider(LLMProvider):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> ArticleDraft:
-        prompt = self._build_prompt(cluster, kb_context)
+        prompt = self._build_prompt(cluster, kb_context, style_examples)
         raw = self._safe_call(prompt)
         return self._parse_response(raw)
 
@@ -66,8 +68,9 @@ class AnthropicProvider(LLMProvider):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> CustomerFAQ:
-        prompt = self._build_customer_faq_prompt(cluster, kb_context)
+        prompt = self._build_customer_faq_prompt(cluster, kb_context, style_examples)
         raw = self._safe_call(prompt)
         return self._parse_customer_faq_response(raw)
 
@@ -122,6 +125,7 @@ class AnthropicProvider(LLMProvider):
     def _build_prompt(
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> str:
         summaries = "\n".join(f"- {s}" for s in cluster.summaries) or "(nenhum)"
         labels = ", ".join(cluster.labels) or "nenhuma"
@@ -133,6 +137,7 @@ class AnthropicProvider(LLMProvider):
                 "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
             )
         kb_block = format_kb_context_block(kb_context)
+        style_block = format_style_examples_block(style_examples)
         return f"""Você é um especialista em documentação técnica de suporte ao cliente da Kobe — empresa que desenvolve aplicativos móveis (iOS e Android) para grandes varejistas brasileiros (ex.: Amaro, Mr. Cat, Zaffari, Epharma).
 
 Sua tarefa: produzir um artigo de Base de Conhecimento **acertivo, específico e acionável**, em português do Brasil, a partir de tickets reais de suporte agrupados por similaridade.
@@ -180,7 +185,7 @@ DIRETRIZES OBRIGATÓRIAS — leia antes de escrever
 
 7. O cliente da Kobe é tipicamente um **varejista** — fala numa linguagem
    que faz sentido pra equipe de suporte de e-commerce/PDV, não pra usuário leigo.
-
+{style_block}
 ═══════════════════════════════════════════════════════════════
 FORMATO DE RESPOSTA
 ═══════════════════════════════════════════════════════════════
@@ -218,11 +223,14 @@ Responda APENAS com JSON válido, sem markdown, sem texto adicional. Estrutura:
     def _build_customer_faq_prompt(
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> str:
         # Mesmo prompt do Gemini — o conteúdo é agnostic de provedor.
         # Importamos lazy pra evitar dependência circular sutil entre os arquivos.
         from kiro.application.generation.gemini_provider import GeminiProvider
-        return GeminiProvider._build_customer_faq_prompt(cluster, kb_context)
+        return GeminiProvider._build_customer_faq_prompt(
+            cluster, kb_context, style_examples
+        )
 
     @staticmethod
     def _parse_customer_faq_response(raw: str) -> CustomerFAQ:

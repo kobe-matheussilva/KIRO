@@ -109,3 +109,44 @@ def test_gitbook_rag_top_k_rejects_zero(monkeypatch):
     monkeypatch.setenv("GITBOOK_RAG_TOP_K", "0")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+# ─── Confluence SUP (style reference + dedupe) ──────────────────────
+
+
+def test_confluence_kb_defaults_off(monkeypatch):
+    _set_required(monkeypatch)
+    s = Settings(_env_file=None)
+    assert s.confluence_kb_space_key == "SUP"
+    assert str(s.confluence_kb_cache_path) == "kiro/data/confluence_sup_cache.json"
+    assert s.enable_confluence_few_shot is False
+    assert s.confluence_few_shot_top_k == 2
+    assert s.confluence_dedupe_threshold == 0.6
+    assert s.confluence_kb_page_size == 25
+
+
+def test_confluence_kb_overrides(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("CONFLUENCE_KB_SPACE_KEY", "DOCS")
+    monkeypatch.setenv("ENABLE_CONFLUENCE_FEW_SHOT", "true")
+    monkeypatch.setenv("CONFLUENCE_FEW_SHOT_TOP_K", "3")
+    monkeypatch.setenv("CONFLUENCE_DEDUPE_THRESHOLD", "0.75")
+    s = Settings(_env_file=None)
+    assert s.confluence_kb_space_key == "DOCS"
+    assert s.enable_confluence_few_shot is True
+    assert s.confluence_few_shot_top_k == 3
+    assert s.confluence_dedupe_threshold == 0.75
+
+
+def test_confluence_few_shot_top_k_rejects_zero(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("CONFLUENCE_FEW_SHOT_TOP_K", "0")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_confluence_dedupe_threshold_rejects_above_one(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("CONFLUENCE_DEDUPE_THRESHOLD", "1.5")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

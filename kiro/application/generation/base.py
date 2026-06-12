@@ -12,12 +12,18 @@ class LLMProvider(ABC):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> ArticleDraft:
         """Gera um KB interno (problema/causa/solução) a partir de um cluster.
 
         Audiência: time de suporte Kobe. Tom técnico-diagnóstico.
-        Quando `kb_context` for não-vazio, os chunks são injetados no prompt
-        como referência factual interna (ver `kb_context.format_kb_context_block`).
+
+        `kb_context` (issue #3) = grounding factual, injetado entre
+        contexto do cluster e diretrizes.
+        `style_examples` (issue #10) = exemplos de tom/estrutura, injetado
+        entre diretrizes e formato. Não confundir os dois — semânticas
+        e posições no prompt diferentes.
+
         Deve lançar LLMError/LLMResponseError em caso de falha.
         """
         ...
@@ -27,12 +33,14 @@ class LLMProvider(ABC):
         self,
         cluster: Cluster,
         kb_context: Sequence[GitBookChunk] = (),
+        style_examples: Sequence[GitBookChunk] = (),
     ) -> CustomerFAQ:
         """Gera um FAQ self-service para varejistas B2B a partir do mesmo cluster.
 
         Audiência: produto/operação do varejista (Amaro, Mr.Cat, Zaffari, Epharma).
         Tom: direto, instrucional, sem jargão de engenharia.
-        Quando `kb_context` for não-vazio, injeta chunks como referência interna.
+
+        Mesmos parâmetros opcionais que `generate_article`.
         Deve lançar LLMError/LLMResponseError em caso de falha.
         """
         ...

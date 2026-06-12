@@ -1,6 +1,7 @@
 """Marca KIRO + Kobe. Usado pra dar identidade visual ao CLI e aos artefatos."""
 
 import sys
+from typing import Optional
 
 from kiro import __version__
 
@@ -39,8 +40,14 @@ def print_footer(
     errors: int,
     duration_seconds: float,
     artifacts_dir: str,
+    dedupe_matches: Optional[list] = None,
 ) -> None:
-    """Resumo final humanizado. Mostrado no fim de cada `kiro run`."""
+    """Resumo final humanizado. Mostrado no fim de cada `kiro run`.
+
+    `dedupe_matches` é opcional: lista de `(Cluster, GitBookChunk)` com
+    matches do SUP. Quando presente, é exibido como hint pro revisor
+    "considere atualizar artigo existente" — política firmada na issue #10.
+    """
     bar = "─" * 50
     print()
     print(f"   {bar}")
@@ -55,6 +62,12 @@ def print_footer(
     print(f"     duração                 : {duration_seconds:>5.1f}s")
     print(f"   {bar}")
     print()
+    if dedupe_matches:
+        print(f"   ⚠ {len(dedupe_matches)} cluster(s) com artigo similar em SUP — "
+              "considere atualizar em vez de criar novo:")
+        for cluster, chunk in dedupe_matches:
+            print(f"     • '{cluster.topic[:50]}' ↔ '{chunk.page_title[:60]}'")
+        print()
     print(f"   artefatos em: {artifacts_dir}")
     print()
     print(f"   ✨ {SIGNATURE} ✨")
