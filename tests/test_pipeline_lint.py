@@ -275,3 +275,46 @@ def test_faq_with_block_skipped(tmp_path):
     assert len(result.customer_faqs) == 0
     assert len(result.lint_blocks) == 1
     pipeline.store.save_customer_faq_markdown.assert_not_called()
+
+
+# ─── audit save ──────────────────────────────────────────────────────
+
+
+def test_audit_saved_after_successful_article(tmp_path):
+    """Article passado pelo linter dispara save_audit com violations."""
+    pipeline = _pipeline(
+        llm=_CannedLLM(article_responses=[_CLEAN_ARTICLE]),
+        linter=OutputLinter(),
+        tmp_path=tmp_path,
+    )
+    result = PipelineResult(clusters=[_cluster()])
+    pipeline._stage_generate(result, PipelineRequest(style="artigo"))
+    pipeline.store.save_audit.assert_called_once()
+    kwargs = pipeline.store.save_audit.call_args.kwargs
+    assert kwargs["kind"] == "article"
+    assert kwargs["title"] == _CLEAN_ARTICLE.title
+
+
+def test_audit_saved_after_successful_faq(tmp_path):
+    pipeline = _pipeline(
+        llm=_CannedLLM(),  # default canned FAQ
+        linter=OutputLinter(),
+        tmp_path=tmp_path,
+    )
+    result = PipelineResult(clusters=[_cluster()])
+    pipeline._stage_generate(result, PipelineRequest(style="faq"))
+    pipeline.store.save_audit.assert_called_once()
+    assert pipeline.store.save_audit.call_args.kwargs["kind"] == "faq"
+
+
+def test_audit_not_saved_when_skip_blocks(tmp_path):
+    """Article bloqueado (mode=skip) NÃO gera auditoria — sem draft."""
+    pipeline = _pipeline(
+        llm=_CannedLLM(article_responses=[_DIRTY_ARTICLE]),
+        linter=OutputLinter(),
+        block_mode="skip",
+        tmp_path=tmp_path,
+    )
+    result = PipelineResult(clusters=[_cluster()])
+    pipeline._stage_generate(result, PipelineRequest(style="artigo"))
+    pipeline.store.save_audit.assert_not_called()
