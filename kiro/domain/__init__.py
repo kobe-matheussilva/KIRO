@@ -3,8 +3,8 @@ from kiro.domain.models import (
     Cluster,
     CustomerFAQ,
     FAQEntry,
-    FAQItem,
     PublishResult,
+    Section,
     Ticket,
 )
 
@@ -13,7 +13,7 @@ __all__ = [
     "Cluster",
     "CustomerFAQ",
     "FAQEntry",
-    "FAQItem",
     "PublishResult",
+    "Section",
     "Ticket",
 ]

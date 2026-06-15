@@ -42,26 +42,28 @@ class LintRule:
 def collect_article_texts(draft: ArticleDraft) -> dict[str, str]:
     """Campos textuais escaneáveis de um ArticleDraft.
 
-    Inclui faq aninhada com dot-path (faq.0.question) pra o caller
-    saber exatamente onde o problema está.
+    Após o redesign da issue #15, ArticleDraft tem `scope_note` + `sections`
+    (cada section com `heading` + `body`) — sem mais problem/cause/solution.
+    Dot-path: `sections.0.heading`, `sections.0.body`.
     """
     out: dict[str, str] = {
         "title": draft.title,
-        "problem": draft.problem,
-        "cause": draft.cause,
-        "solution": draft.solution,
+        "scope_note": draft.scope_note,
     }
-    for i, item in enumerate(draft.faq):
-        out[f"faq.{i}.question"] = item.question
-        out[f"faq.{i}.answer"] = item.answer
+    for i, section in enumerate(draft.sections):
+        out[f"sections.{i}.heading"] = section.heading
+        out[f"sections.{i}.body"] = section.body
     return out
 
 
 def collect_faq_texts(draft: CustomerFAQ) -> dict[str, str]:
-    """Campos textuais escaneáveis de um CustomerFAQ."""
+    """Campos textuais escaneáveis de um CustomerFAQ.
+
+    Após o redesign da issue #15, `intro` virou `scope_note` (curto).
+    """
     out: dict[str, str] = {
         "title": draft.title,
-        "intro": draft.intro,
+        "scope_note": draft.scope_note,
     }
     for i, entry in enumerate(draft.entries):
         out[f"entries.{i}.question"] = entry.question
@@ -272,33 +274,39 @@ def _check_generic_phrases(fields: dict[str, str]) -> list[Violation]:
     return out
 
 
-def _check_solution_step_count(fields: dict[str, str]) -> list[Violation]:
-    """Só faz sentido pro campo `solution` do ArticleDraft."""
-    text = fields.get("solution")
-    if text is None:
-        return []
-    # Conta linhas não-vazias separadas por \n; cada uma é um passo
-    steps = [line for line in text.split("\n") if line.strip()]
-    if len(steps) < 4:
+def _check_article_min_sections(fields: dict[str, str]) -> list[Violation]:
+    """Conta sections distintas; alvo é >= 3 (artigos rasos viram FAQ).
+
+    Substitui solution_step_count após o redesign da issue #15. Schema
+    já enforça min 2 — esta regra recomenda 3+ pra cobertura razoável.
+    """
+    section_ids: set[str] = set()
+    for key in fields:
+        if key.startswith("sections.") and key.endswith(".heading"):
+            section_ids.add(key.split(".")[1])
+    n = len(section_ids)
+    if 0 < n < 3:
         return [
             Violation(
-                rule_name="solution_step_count",
+                rule_name="article_min_sections",
                 severity="warn",
-                field="solution",
-                message=f"solução tem {len(steps)} passo(s) — ideal mínimo é 4",
+                field="sections",
+                message=f"artigo tem {n} section(s) — ideal 3+ pra cobertura razoável",
             )
         ]
     return []
 
 
 def _check_field_lengths(fields: dict[str, str]) -> list[Violation]:
-    """Tamanhos mínimos por campo. Heurística simples — abaixo disso, raro
-    dar conta de cobrir o tópico com detalhe."""
+    """Tamanhos mínimos por campo. Heurística simples — abaixo disso,
+    raro dar conta de cobrir o tópico com detalhe.
+
+    Após redesign da issue #15: scope_note é CURTO por design (1 frase),
+    então o threshold mínimo é baixo. Conteúdo principal vai nas sections.
+    """
     min_lengths = {
-        "problem": 50,
-        "cause": 30,
-        "solution": 100,
-        "intro": 40,
+        "scope_note": 30,
+        "title": 15,
     }
     out: list[Violation] = []
     for field, min_len in min_lengths.items():
@@ -363,8 +371,8 @@ RULES_WARN_COMMON: list[LintRule] = [
 ]
 
 RULES_ARTICLE: list[LintRule] = [
-    LintRule("solution_step_count", "warn", _check_solution_step_count,
-             "Solução com menos de 4 passos"),
+    LintRule("article_min_sections", "warn", _check_article_min_sections,
+             "Artigo com menos de 3 sections (cobertura rasa)"),
 ]
 
 RULES_FAQ: list[LintRule] = [

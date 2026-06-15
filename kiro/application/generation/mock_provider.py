@@ -9,8 +9,8 @@ from kiro.domain.models import (
     Cluster,
     CustomerFAQ,
     FAQEntry,
-    FAQItem,
     GitBookChunk,
+    Section,
 )
 
 log = logging.getLogger(__name__)
@@ -22,8 +22,8 @@ class MockLLMProvider(LLMProvider):
     Nenhuma chamada externa. Garante que `--dry-run` não consuma quota da API real
     e que a demo local seja reprodutível e gratuita.
 
-    Aceita `kb_context` por contrato da interface, mas IGNORA — o output mock é
-    derivado só do cluster, sem injeção de chunks.
+    Aceita `kb_context` / `style_examples` por contrato da interface, mas IGNORA —
+    o output mock é derivado só do cluster, sem injeção de chunks.
     """
 
     def generate_article(
@@ -33,35 +33,36 @@ class MockLLMProvider(LLMProvider):
         style_examples: Sequence[GitBookChunk] = (),
     ) -> ArticleDraft:
         log.info(
-            "MOCK LLM: gerando draft KB interno para cluster '%s' (%d tickets)",
+            "MOCK LLM: gerando ArticleDraft para cluster '%s' (%d tickets)",
             cluster.topic,
             cluster.count,
         )
         sample = cluster.summaries[0] if cluster.summaries else cluster.topic
-        components = ", ".join(cluster.components) or "não identificados"
-        tags = cluster.labels[:5] if cluster.labels else [cluster.topic.split()[0].lower() or "geral"]
+        tags = cluster.labels[:5] if cluster.labels else [
+            cluster.topic.split()[0].lower() or "geral"
+        ]
         return ArticleDraft(
-            title=f"[DRY-RUN] {cluster.topic}",
-            problem=(
-                f"Foram identificados {cluster.count} tickets recorrentes sobre "
-                f"'{cluster.topic}'. Sintoma típico relatado: {sample}."
+            title=f"[DRY-RUN] Solução para {cluster.topic}",
+            scope_note=(
+                f"Conteúdo simulado em modo dry-run para o tema '{cluster.topic}' "
+                f"({cluster.count} tickets recorrentes no período)."
             ),
-            cause=(
-                "Causa preliminar não confirmada — artigo gerado em modo dry-run, "
-                f"sem consulta ao LLM real. Componentes afetados: {components}."
-            ),
-            solution=(
-                "1. Reproduzir o problema em ambiente controlado\n"
-                "2. Identificar a causa raiz a partir dos logs e dos tickets de origem\n"
-                "3. Aplicar correção e validar com os tickets associados\n"
-                "4. Documentar o procedimento neste artigo e publicar"
-            ),
-            faq=[
-                FAQItem(
-                    question=f"Como reconhecer o problema relacionado a '{cluster.topic}'?",
-                    answer=(
-                        f"Os tickets de origem ({cluster.count} ao todo) reportam sintomas "
-                        f"semelhantes a: {sample}."
+            sections=[
+                Section(
+                    heading=f"Como verificar a configuração de {cluster.topic}",
+                    body=(
+                        f"Conteúdo simulado em modo dry-run. Sintoma típico reportado: "
+                        f"{sample}.\n\n"
+                        "- Verifique o painel admin Kobe\n"
+                        "- Confirme permissões da equipe responsável\n"
+                        "- Teste em ambiente de homologação"
+                    ),
+                ),
+                Section(
+                    heading=f"O que fazer se {cluster.topic} continua apresentando o comportamento",
+                    body=(
+                        "Conteúdo simulado em modo dry-run — produção utilizará a IA real para "
+                        "gerar passos específicos baseados nas descrições dos tickets."
                     ),
                 ),
             ],
@@ -84,39 +85,38 @@ class MockLLMProvider(LLMProvider):
             cluster.topic.split()[0].lower() or "geral"
         ]
         return CustomerFAQ(
-            title=f"[DRY-RUN] FAQ — {cluster.topic}",
-            intro=(
-                f"Este FAQ cobre dúvidas frequentes do time de produto/operação do "
-                f"varejista sobre '{cluster.topic}'. Foi gerado em modo dry-run a partir "
-                f"de {cluster.count} tickets recorrentes."
+            title=f"[DRY-RUN] Dúvidas sobre {cluster.topic}",
+            scope_note=(
+                f"Perguntas frequentes sobre '{cluster.topic}' "
+                f"({cluster.count} tickets recorrentes)."
             ),
             entries=[
                 FAQEntry(
-                    question=f"O que devo saber sobre '{cluster.topic}'?",
+                    question=f"O que devo saber sobre {cluster.topic}?",
                     answer=(
-                        f"Este é um tema recorrente no suporte ({cluster.count} ocorrências). "
-                        f"Exemplo de sintoma reportado: {sample}."
+                        f"Tema recorrente no suporte ({cluster.count} ocorrências). "
+                        f"Exemplo de sintoma: {sample}."
                     ),
                     when_to_contact=None,
                 ),
                 FAQEntry(
-                    question="Quando devo abrir um ticket de suporte sobre isso?",
+                    question="Como verifico se está configurado corretamente?",
                     answer=(
-                        "Após verificar as configurações no painel admin Kobe e ainda "
-                        "assim o problema persistir."
+                        "Verifique no painel admin Kobe se a configuração está ativa "
+                        "e as permissões liberadas para a equipe responsável."
+                    ),
+                    when_to_contact=None,
+                ),
+                FAQEntry(
+                    question="O que fazer se mesmo configurado não funcionar?",
+                    answer=(
+                        "Tente reproduzir em ambiente de homologação e registre o "
+                        "horário exato da ocorrência."
                     ),
                     when_to_contact=(
-                        "Abra um ticket fornecendo: print da tela com o problema, "
-                        "horário aproximado da ocorrência e identificador do varejista."
+                        "Abra ticket fornecendo: print da tela, horário aproximado da "
+                        "ocorrência e identificador do varejista."
                     ),
-                ),
-                FAQEntry(
-                    question="Onde encontro a configuração relacionada no painel?",
-                    answer=(
-                        "(Conteúdo simulado em modo dry-run — produção utilizará a IA real "
-                        "para gerar resposta específica baseada nas descrições dos tickets.)"
-                    ),
-                    when_to_contact=None,
                 ),
             ],
             tags=tags,

@@ -15,40 +15,49 @@ from kiro.domain.models import (
     Cluster,
     CustomerFAQ,
     FAQEntry,
-    FAQItem,
     GitBookChunk,
+    Section,
 )
 
 
 # Drafts pré-fabricados pra controlar exatamente o que o linter vai ver
 _CLEAN_ARTICLE = ArticleDraft(
     title="Configurando Notificações Push no Aplicativo",
-    problem=(
-        "Quando o varejista habilita push notifications no painel admin, "
-        "alguns clientes finais não recebem as notificações esperadas."
+    scope_note=(
+        "Perguntas frequentes sobre configuração de push notifications "
+        "no aplicativo do varejista."
     ),
-    cause=(
-        "Pode ocorrer quando o token de dispositivo não foi sincronizado "
-        "corretamente com a plataforma."
-    ),
-    solution=(
-        "Acesse Configurações > Notificações.\n"
-        "Verifique o status do canal de envio.\n"
-        "Confirme permissões no aplicativo.\n"
-        "Teste com a ferramenta de simulação.\n"
-        "Caso persista, registre o caso."
-    ),
-    faq=[FAQItem(question="Como ativar?", answer="No painel > Notificações.")],
+    sections=[
+        Section(
+            heading="Como ativar push no painel admin",
+            body=(
+                "Acesse Configurações > Notificações.\n"
+                "Habilite o canal e teste com a ferramenta de simulação."
+            ),
+        ),
+        Section(
+            heading="Push não chega no app iOS",
+            body=(
+                "Verifique se o certificado APNs está válido e se o "
+                "usuário concedeu permissão no app."
+            ),
+        ),
+        Section(
+            heading="Como saber a taxa de entrega",
+            body=(
+                "No painel > Histórico de Envios é possível ver "
+                "entrega e abertura por campanha."
+            ),
+        ),
+    ],
     tags=["push"],
 )
 
 # Versão com vazamento — várias regras BLOCK disparam
 _DIRTY_ARTICLE = ArticleDraft(
     title="Bug em OPE-1234: regressão de push",  # block: ope code + bug + regressão
-    problem=_CLEAN_ARTICLE.problem,
-    cause=_CLEAN_ARTICLE.cause,
-    solution=_CLEAN_ARTICLE.solution,
-    faq=_CLEAN_ARTICLE.faq,
+    scope_note=_CLEAN_ARTICLE.scope_note,
+    sections=_CLEAN_ARTICLE.sections,
     tags=_CLEAN_ARTICLE.tags,
 )
 
@@ -77,8 +86,8 @@ class _CannedLLM(LLMProvider):
         if self._faq:
             return self._faq.pop(0)
         return CustomerFAQ(
-            title="FAQ Push",
-            intro="Este FAQ cobre dúvidas comuns das equipes de produto do varejista.",
+            title="Dúvidas sobre Push Notifications",
+            scope_note="Perguntas frequentes sobre push notifications.",
             entries=[FAQEntry(question=f"q{i}", answer="r" * 30) for i in range(5)],
         )
 
@@ -219,17 +228,15 @@ def test_warn_mode_saves_even_with_blocks(tmp_path):
 
 
 def test_warn_violations_recorded_even_when_not_blocked(tmp_path):
-    """Draft só com warn (poucos passos) salva normalmente e registra warn."""
-    short_steps_draft = ArticleDraft(
-        title="Push Setup",
-        problem=_CLEAN_ARTICLE.problem,
-        cause=_CLEAN_ARTICLE.cause,
-        solution="1. um\n2. dois\n3. três",  # < 4 passos = warn
-        faq=_CLEAN_ARTICLE.faq,
+    """Draft só com warn (artigo com 2 sections em vez de 3+) salva e registra warn."""
+    short_draft = ArticleDraft(
+        title="Solução de Problemas com Push Notifications no App",
+        scope_note=_CLEAN_ARTICLE.scope_note,
+        sections=_CLEAN_ARTICLE.sections[:2],  # 2 sections → warn article_min_sections
         tags=["push"],
     )
     pipeline = _pipeline(
-        llm=_CannedLLM(article_responses=[short_steps_draft]),
+        llm=_CannedLLM(article_responses=[short_draft]),
         linter=OutputLinter(),
         block_mode="skip",
         tmp_path=tmp_path,
@@ -238,9 +245,8 @@ def test_warn_violations_recorded_even_when_not_blocked(tmp_path):
     pipeline._stage_generate(result, PipelineRequest(style="artigo"))
     assert len(result.articles) == 1  # salvou
     assert len(result.lint_warnings) == 1
-    # Conjunto de warns inclui solution_step_count
     _, warns = result.lint_warnings[0]
-    assert any(w.rule_name == "solution_step_count" for w in warns)
+    assert any(w.rule_name == "article_min_sections" for w in warns)
 
 
 # ─── FAQ flow ───────────────────────────────────────────────────────
@@ -248,8 +254,8 @@ def test_warn_violations_recorded_even_when_not_blocked(tmp_path):
 
 def test_faq_with_block_skipped(tmp_path):
     dirty_faq = CustomerFAQ(
-        title="FAQ Push",
-        intro="Este FAQ cobre dúvidas comuns das equipes do varejista.",
+        title="Dúvidas sobre Push Notifications",
+        scope_note="Perguntas frequentes sobre push notifications.",
         entries=[
             FAQEntry(question="Como funciona?", answer="Veja OPE-9999 pra detalhes."),
             FAQEntry(question="q2", answer="r" * 30),
