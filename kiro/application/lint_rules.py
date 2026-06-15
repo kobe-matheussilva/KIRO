@@ -12,6 +12,7 @@ ficam em listas separadas — `RULES_COMMON` aplica aos dois.
 """
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Callable, Literal
 
@@ -130,6 +131,56 @@ _GENERIC_PHRASES: tuple[str, ...] = (
     "abra um chamado",
     "contate o suporte",
 )
+
+# ─── Issue #15: qualidade estrutural (WARN) ─────────────────────────
+
+# Palavras genéricas no título — não nomeiam funcionalidade/módulo específico.
+# Pelo menos 2 dessas no título indica título "guarda-chuva" (warn).
+_GENERIC_TITLE_WORDS: frozenset[str] = frozenset({
+    "otimizando", "otimização", "otimizacao",
+    "configurações", "configuracoes",
+    "geral", "diversos", "diversas",
+    "análise", "analise",
+    "gestão", "gestao",
+    "aplicativo",  # sem dizer qual app
+    "seu",  # "no seu aplicativo" — vago
+    "sua",
+    "melhores", "boas",  # "melhores práticas", "boas práticas"
+    "práticas", "praticas",
+})
+
+# Headings de "relatório técnico" que a chefe explicitamente pediu pra evitar
+# (feedback de 2026-06-14 sobre primeira rodada).
+_REPORT_STRUCTURE_HEADINGS: frozenset[str] = frozenset({
+    "sobre este artigo", "sobre o artigo", "sobre este faq",
+    "visão geral", "visao geral",
+    "quando isso acontece",
+    "como resolver",
+    "como resolver isso",
+    "introdução", "introducao",
+    "objetivo", "objetivos",
+    "contexto",
+    "problema", "problemas",
+    "causa", "causas", "causa raiz",
+    "solução", "solucao",
+})
+
+# Prefixos burocráticos em perguntas — cliente não fala assim no chat.
+_BUROCRATIC_QUESTION_PREFIXES: tuple[str, ...] = (
+    "quais procedimentos",
+    "qual o procedimento",
+    "qual procedimento",
+    "quais providências",
+    "quais providencias",
+    "quais medidas",
+    "quais são os procedimentos",
+    "qual a metodologia",
+    "qual o protocolo",
+)
+
+# Limiares
+_SCOPE_NOTE_MAX_CHARS = 200
+_QUESTION_MAX_CHARS = 80
 
 
 # ─── regras BLOCK (vazamento interno) ───────────────────────────────
@@ -323,6 +374,135 @@ def _check_field_lengths(fields: dict[str, str]) -> list[Violation]:
     return out
 
 
+def _check_title_too_generic(fields: dict[str, str]) -> list[Violation]:
+    """Título deve nomear funcionalidade/módulo. >=2 palavras genéricas = warn.
+
+    Issue #15: feedback da chefe "não fica claro qual a funcionalidade ou
+    módulo está sendo impactado". Heurística: conta palavras vagas
+    ("otimizando", "configurações", "aplicativo") sem nome de produto.
+    """
+    title = fields.get("title", "")
+    if not title:
+        return []
+    normalized = unicodedata.normalize("NFKD", title.lower())
+    ascii_only = "".join(c for c in normalized if not unicodedata.combining(c))
+    words = re.findall(r"[a-z]+", ascii_only)
+    generic_hits = sum(1 for w in words if w in _GENERIC_TITLE_WORDS)
+    if generic_hits >= 2:
+        return [
+            Violation(
+                rule_name="title_too_generic",
+                severity="warn",
+                field="title",
+                message=(
+                    f"título tem {generic_hits} palavras genéricas — considere "
+                    f"identificar a funcionalidade ou módulo específico"
+                ),
+            )
+        ]
+    return []
+
+
+def _check_has_report_structure(fields: dict[str, str]) -> list[Violation]:
+    """Bloqueia headings tipo 'Sobre este artigo' / 'Como resolver' / etc.
+
+    Issue #15: padrão SUP usa perguntas naturais como heading, NÃO seções
+    tipo relatório técnico. Headings dessa lista viram WARN.
+    """
+    out: list[Violation] = []
+    for key, text in fields.items():
+        if not key.endswith(".heading") and key != "title":
+            continue
+        if not text:
+            continue
+        normalized = unicodedata.normalize("NFKD", text.lower().strip())
+        ascii_only = "".join(c for c in normalized if not unicodedata.combining(c))
+        # Remove pontuação final pra match limpo
+        cleaned = re.sub(r"[?!.:]+$", "", ascii_only).strip()
+        if cleaned in _REPORT_STRUCTURE_HEADINGS:
+            out.append(
+                Violation(
+                    rule_name="has_report_structure",
+                    severity="warn",
+                    field=key,
+                    message=(
+                        f"heading '{text}' tem estrutura de relatório — "
+                        f"prefira pergunta natural ou tópico específico"
+                    ),
+                )
+            )
+    return out
+
+
+def _check_scope_note_too_long(fields: dict[str, str]) -> list[Violation]:
+    """scope_note deve ser CURTO (1-2 frases). >200 chars = warn.
+
+    Issue #15: chefe pediu "intro mais simples e direcionada". O scope_note
+    longo indica que voltamos ao formato relatório.
+    """
+    scope = fields.get("scope_note", "")
+    if not scope:
+        return []
+    n = len(scope.strip())
+    if n > _SCOPE_NOTE_MAX_CHARS:
+        return [
+            Violation(
+                rule_name="scope_note_too_long",
+                severity="warn",
+                field="scope_note",
+                message=(
+                    f"scope_note tem {n} chars (máximo recomendado: "
+                    f"{_SCOPE_NOTE_MAX_CHARS}) — corte pra 1-2 frases"
+                ),
+            )
+        ]
+    return []
+
+
+def _check_question_too_burocratica(fields: dict[str, str]) -> list[Violation]:
+    """Perguntas devem ser naturais (chat-style), não burocráticas.
+
+    Issue #15: chefe disse "no chat o cliente faz perguntas bem direcionadas".
+    Heurística: pergunta > 80 chars OU começa com prefixo burocrático.
+    Aplica a entries.N.question (CustomerFAQ).
+    """
+    out: list[Violation] = []
+    for key, text in fields.items():
+        if not key.startswith("entries.") or not key.endswith(".question"):
+            continue
+        if not text:
+            continue
+        cleaned = text.strip()
+        normalized = unicodedata.normalize("NFKD", cleaned.lower())
+        ascii_only = "".join(c for c in normalized if not unicodedata.combining(c))
+        if any(ascii_only.startswith(p) for p in _BUROCRATIC_QUESTION_PREFIXES):
+            out.append(
+                Violation(
+                    rule_name="question_too_burocratica",
+                    severity="warn",
+                    field=key,
+                    message=(
+                        f"pergunta com prefixo burocrático — reformule como "
+                        f"o cliente perguntaria no chat ('Como ativo...?')"
+                    ),
+                )
+            )
+            continue
+        if len(cleaned) > _QUESTION_MAX_CHARS:
+            out.append(
+                Violation(
+                    rule_name="question_too_burocratica",
+                    severity="warn",
+                    field=key,
+                    message=(
+                        f"pergunta com {len(cleaned)} chars (máximo: "
+                        f"{_QUESTION_MAX_CHARS}) — encurte pra tom de chat"
+                    ),
+                )
+            )
+    return out
+
+
 def _check_faq_entries_count(fields: dict[str, str]) -> list[Violation]:
     """CustomerFAQ ideal tem 5+ entries (Pydantic exige >=3)."""
     # Conta chaves no formato entries.N.question
@@ -368,6 +548,13 @@ RULES_WARN_COMMON: list[LintRule] = [
              "Sinaliza frases vagas tipo 'verifique as configurações'"),
     LintRule("field_too_short", "warn", _check_field_lengths,
              "Sinaliza campos curtos demais pra cobrir o tópico"),
+    # Issue #15: feedback estrutural da chefe
+    LintRule("title_too_generic", "warn", _check_title_too_generic,
+             "Título não nomeia funcionalidade/módulo específico"),
+    LintRule("has_report_structure", "warn", _check_has_report_structure,
+             "Heading com estrutura de relatório (Sobre/Quando/Como)"),
+    LintRule("scope_note_too_long", "warn", _check_scope_note_too_long,
+             "scope_note longo demais (>200 chars)"),
 ]
 
 RULES_ARTICLE: list[LintRule] = [
@@ -378,4 +565,7 @@ RULES_ARTICLE: list[LintRule] = [
 RULES_FAQ: list[LintRule] = [
     LintRule("faq_entries_count", "warn", _check_faq_entries_count,
              "FAQ com menos de 5 entries"),
+    # Issue #15: chefe pediu perguntas naturais (chat-style)
+    LintRule("question_too_burocratica", "warn", _check_question_too_burocratica,
+             "Pergunta burocrática ou longa demais (>80 chars)"),
 ]

@@ -12,10 +12,14 @@ from kiro.application.lint_rules import (
     _check_faq_entries_count,
     _check_field_lengths,
     _check_generic_phrases,
+    _check_has_report_structure,
     _check_internal_components,
     _check_internal_jargon,
     _check_ope_codes,
+    _check_question_too_burocratica,
+    _check_scope_note_too_long,
     _check_team_references,
+    _check_title_too_generic,
     collect_article_texts,
     collect_faq_texts,
 )
@@ -294,3 +298,134 @@ def test_faq_ok_entries_pass():
 def test_faq_zero_entries_skipped():
     # Sem entries (não é CustomerFAQ) — regra não deve disparar
     assert _check_faq_entries_count({}) == []
+
+
+# ─── Issue #15: title_too_generic ──────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Otimizando a Execução de Testes no Seu Aplicativo",
+        "Análise de Performance e Configurações de Promoções no App",
+        "Boas Práticas no Aplicativo",
+        "Gestão de Configurações Diversas",
+    ],
+)
+def test_generic_title_warns(title):
+    v = _check_title_too_generic({"title": title})
+    assert any(viol.rule_name == "title_too_generic" for viol in v)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Solução de Problemas com Push Notifications no App",
+        "Configurando Cashback por Loja Física no VTEX",
+        "Dúvidas sobre Deeplink no App",
+        "Entendendo o Modo Debug do Firebase",
+    ],
+)
+def test_specific_title_passes(title):
+    assert _check_title_too_generic({"title": title}) == []
+
+
+# ─── Issue #15: has_report_structure ───────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "Sobre este artigo",
+        "Visão Geral",
+        "Quando isso acontece",
+        "Como resolver",
+        "Causa raiz",
+        "Introdução",
+        "Problema",
+    ],
+)
+def test_report_heading_detected(heading):
+    fields = {f"sections.0.heading": heading, "sections.0.body": "..."}
+    v = _check_has_report_structure(fields)
+    assert any(viol.rule_name == "has_report_structure" for viol in v)
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "Como ativar push no painel",
+        "Push não está chegando no iOS",
+        "Deeplink X Navegador",
+        "Quero excluir um link",
+        "O que é preciso para ativar o Deeplink",
+    ],
+)
+def test_natural_heading_passes(heading):
+    fields = {"sections.0.heading": heading, "sections.0.body": "..."}
+    assert _check_has_report_structure(fields) == []
+
+
+def test_report_heading_in_title_also_warns():
+    """Mesmo título não deve ter 'Sobre este artigo' como cabeçalho."""
+    fields = {"title": "Sobre este artigo"}
+    v = _check_has_report_structure(fields)
+    assert len(v) == 1
+
+
+# ─── Issue #15: scope_note_too_long ────────────────────────────────
+
+
+def test_scope_note_under_threshold_passes():
+    v = _check_scope_note_too_long({"scope_note": "Perguntas frequentes sobre push."})
+    assert v == []
+
+
+def test_scope_note_over_threshold_warns():
+    long_scope = (
+        "Este artigo cobre todas as configurações relacionadas ao envio de "
+        "push notifications no aplicativo, incluindo cenários de iOS, Android, "
+        "diferentes plataformas e-commerce integradas e configurações específicas "
+        "que podem afetar o comportamento de entrega."
+    )
+    v = _check_scope_note_too_long({"scope_note": long_scope})
+    assert any(viol.rule_name == "scope_note_too_long" for viol in v)
+
+
+# ─── Issue #15: question_too_burocratica ───────────────────────────
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Quais procedimentos devem ser seguidos para habilitação do recurso de push notifications no aplicativo?",
+        "Qual o procedimento adequado para configuração de cashback?",
+        "Quais providências adotar quando o deeplink não funciona?",
+    ],
+)
+def test_burocratic_question_warns(question):
+    fields = {"entries.0.question": question}
+    v = _check_question_too_burocratica(fields)
+    assert any(viol.rule_name == "question_too_burocratica" for viol in v)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Como ativo push notifications?",
+        "Por que o deeplink não está abrindo?",
+        "Posso testar push no simulador?",
+        "Como excluir um link do direcionamento?",
+    ],
+)
+def test_natural_question_passes(question):
+    fields = {"entries.0.question": question}
+    assert _check_question_too_burocratica(fields) == []
+
+
+def test_long_question_warns_even_if_not_burocratic():
+    """Pergunta natural mas longa demais (>80 chars) ainda warna."""
+    long_q = "Como configurar push notifications no aplicativo para clientes iOS e Android com integração VTEX?"
+    fields = {"entries.0.question": long_q}
+    v = _check_question_too_burocratica(fields)
+    assert any(viol.rule_name == "question_too_burocratica" for viol in v)
