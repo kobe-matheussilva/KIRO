@@ -1,7 +1,6 @@
 """Cliente HTTP para Confluence Cloud. Storage Format com escaping."""
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -16,8 +15,6 @@ from tenacity import (
 from kiro.domain.exceptions import ConfluenceError
 from kiro.domain.models import ArticleDraft, Cluster
 from kiro.utils.branding import CONFLUENCE_FOOTER
-
-_LEADING_NUMBER_RE = re.compile(r"^\s*\d+\s*[.\)\-]\s+")
 
 log = logging.getLogger(__name__)
 
@@ -87,51 +84,26 @@ class ConfluenceClient:
 
     @classmethod
     def _render_storage(cls, article: ArticleDraft, cluster: Cluster) -> str:
+        """Renderiza Article no padrão SUP (issue #15).
+
+        Sem metadados internos (tickets, labels, components) — eles ficam só
+        em `output/audit/`. O draft que vai pro Confluence é puramente
+        cliente-facing: scope_note em panel info + sections H2.
+        """
         esc = cls._escape
-        faq_rows = "".join(
-            f"<tr><td><strong>{esc(item.question)}</strong></td>"
-            f"<td>{esc(item.answer)}</td></tr>"
-            for item in article.faq
+        sections_html = "".join(
+            f"<h2>{esc(section.heading)}</h2>"
+            f"<p>{esc(section.body).replace(chr(10), '<br/>')}</p>"
+            for section in article.sections
         )
-        faq_block = (
-            "<h2>Perguntas Frequentes</h2>"
-            "<table><tbody>"
-            "<tr><th>Pergunta</th><th>Resposta</th></tr>"
-            f"{faq_rows}"
-            "</tbody></table>"
-        ) if faq_rows else ""
-
-        steps = "".join(
-            f"<li>{esc(stripped)}</li>"
-            for step in article.solution.split("\n")
-            if (stripped := _LEADING_NUMBER_RE.sub("", step).strip())
-        )
-
-        tickets_html = " ".join(f"<code>{esc(k)}</code>" for k in cluster.tickets[:10])
-        month = datetime.now(timezone.utc).strftime("%Y-%m")
-
+        tags_html = esc(", ".join(article.tags)) or "—"
         return (
             '<ac:structured-macro ac:name="info">'
-            '<ac:parameter ac:name="title">Rascunho automático</ac:parameter>'
             "<ac:rich-text-body>"
-            f"<p>Gerado a partir de <strong>{cluster.count} tickets</strong> em {month}. "
-            "Revise antes de publicar.</p>"
-            f"<p>Tickets de origem: {tickets_html}</p>"
+            f"<p>{esc(article.scope_note)}</p>"
             "</ac:rich-text-body>"
             "</ac:structured-macro>"
-            f"<h2>Problema</h2><p>{esc(article.problem)}</p>"
-            f"<h2>Causa raiz</h2><p>{esc(article.cause)}</p>"
-            f"<h2>Solução</h2><ol>{steps}</ol>"
-            f"{faq_block}"
-            "<h2>Metadados</h2>"
-            "<table><tbody>"
-            f"<tr><td><strong>Total de tickets</strong></td><td>{cluster.count}</td></tr>"
-            f"<tr><td><strong>Componentes</strong></td>"
-            f"<td>{esc(', '.join(cluster.components)) or '—'}</td></tr>"
-            f"<tr><td><strong>Labels</strong></td>"
-            f"<td>{esc(', '.join(cluster.labels)) or '—'}</td></tr>"
-            f"<tr><td><strong>Tags</strong></td>"
-            f"<td>{esc(', '.join(article.tags)) or '—'}</td></tr>"
-            "</tbody></table>"
+            f"{sections_html}"
+            f"<p><strong>Tags:</strong> {tags_html}</p>"
             f"{CONFLUENCE_FOOTER}"
         )
