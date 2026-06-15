@@ -220,6 +220,7 @@ class Pipeline:
                     result.customer_faqs.append((cluster, faq))
                     self.store.save_customer_faq_markdown(cluster, faq)
                     self.store.save_customer_faq_docx(cluster, faq)
+                    self._save_audit_for(cluster, faq.title, "faq", lint)
                 else:  # "artigo"
                     with self.narrator.step(
                         f"redigindo Artigo sobre '{cluster.topic[:60]}'..."
@@ -234,6 +235,7 @@ class Pipeline:
                     result.articles.append((cluster, article))
                     self.store.save_article_markdown(cluster, article)
                     self.store.save_article_docx(cluster, article)
+                    self._save_audit_for(cluster, article.title, "article", lint)
             except LinterBlocked:
                 # LINTER_BLOCK_MODE=fail — propaga pra abortar a rodada inteira.
                 # Os outros modos (skip/warn) NÃO levantam — fluxo segue normalmente.
@@ -421,6 +423,33 @@ class Pipeline:
             )
         # mode == "warn": registrou mas não interfere
         return lint
+
+    def _save_audit_for(
+        self,
+        cluster: Cluster,
+        title: str,
+        kind: str,
+        lint: LinterResult,
+    ) -> None:
+        """Salva auditoria interna em output/audit/ — substitui a nota com OPE-
+        que antes ficava no fim do `.md` (issue #15).
+
+        Falhas viram warning e não derrubam o pipeline — auditoria é
+        nice-to-have, não pode bloquear save do draft.
+        """
+        try:
+            violations = [
+                {
+                    "rule": v.rule_name,
+                    "severity": v.severity,
+                    "field": v.field,
+                    "message": v.message,
+                }
+                for v in (list(lint.warns) + list(lint.blocks))
+            ]
+            self.store.save_audit(cluster, title=title, kind=kind, violations=violations)
+        except Exception as e:  # noqa: BLE001 — auditoria nunca pode derrubar geração
+            log.warning("save_audit falhou pro draft '%s': %s", title, e)
 
     def _publish_one(
         self,

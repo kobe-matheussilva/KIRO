@@ -1,4 +1,7 @@
-"""Testes do OutputLinter engine — agregação + dispatch por tipo (issue #12)."""
+"""Testes do OutputLinter engine — agregação + dispatch por tipo (issue #12).
+
+Atualizado pra novo schema da issue #15 (Section + scope_note).
+"""
 
 import pytest
 
@@ -7,31 +10,41 @@ from kiro.domain.models import (
     ArticleDraft,
     CustomerFAQ,
     FAQEntry,
-    FAQItem,
+    Section,
 )
 
 
 def _clean_article() -> ArticleDraft:
     return ArticleDraft(
-        title="Configurando Notificações Push no Aplicativo",
-        problem=(
-            "Quando o varejista habilita push notifications no painel admin, "
-            "alguns clientes finais não recebem as notificações esperadas "
-            "no aplicativo móvel."
+        title="Solução de Problemas com Push Notifications no App",
+        scope_note=(
+            "Perguntas frequentes sobre push notifications no aplicativo para "
+            "equipes de produto do varejista."
         ),
-        cause=(
-            "O comportamento pode ocorrer quando o token de dispositivo não "
-            "foi sincronizado corretamente com a plataforma de envio."
-        ),
-        solution=(
-            "Acesse Configurações > Notificações no painel admin.\n"
-            "Verifique se o status do canal está ativo.\n"
-            "Confirme as permissões de notificação no aplicativo.\n"
-            "Teste o envio com a ferramenta de simulação.\n"
-            "Caso persista, registre o caso para análise."
-        ),
-        faq=[
-            FAQItem(question="Como ativar?", answer="No painel admin > Notificações."),
+        sections=[
+            Section(
+                heading="Como ativar push notifications no painel",
+                body=(
+                    "Acesse Configurações > Notificações no painel admin.\n"
+                    "- Habilite o canal de envio\n"
+                    "- Confirme as credenciais APNs (iOS) e FCM (Android)\n"
+                    "- Teste com a ferramenta de simulação"
+                ),
+            ),
+            Section(
+                heading="Notificações não estão chegando no app iOS",
+                body=(
+                    "Verifique se o certificado APNs está válido e se o app "
+                    "tem permissão concedida pelo usuário final."
+                ),
+            ),
+            Section(
+                heading="Como saber quem recebeu uma notificação enviada",
+                body=(
+                    "No painel admin > Histórico de Envios é possível ver a taxa "
+                    "de entrega e abertura por campanha."
+                ),
+            ),
         ],
         tags=["push", "notificação"],
     )
@@ -39,13 +52,12 @@ def _clean_article() -> ArticleDraft:
 
 def _clean_faq() -> CustomerFAQ:
     return CustomerFAQ(
-        title="FAQ Configuração de Push Notifications",
-        intro=(
-            "Este FAQ cobre as dúvidas mais comuns das equipes de produto "
-            "do varejista ao configurar notificações push no aplicativo."
+        title="Dúvidas sobre Push Notifications no App",
+        scope_note=(
+            "Perguntas frequentes sobre push notifications para equipes de produto."
         ),
         entries=[
-            FAQEntry(question=f"P{i}?", answer="R" * 30)
+            FAQEntry(question=f"Pergunta direta {i}?", answer="R" * 30)
             for i in range(5)
         ],
         tags=["push"],
@@ -76,9 +88,7 @@ def test_empty_result_not_blocked():
 def test_result_with_only_warns_not_blocked():
     from kiro.application.lint_rules import Violation
 
-    r = LinterResult(
-        warns=[Violation("r", "warn", "f", "msg")],
-    )
+    r = LinterResult(warns=[Violation("r", "warn", "f", "msg")])
     assert r.is_blocked is False
     assert "0 block" in r.summary
     assert "1 warn" in r.summary
@@ -87,9 +97,7 @@ def test_result_with_only_warns_not_blocked():
 def test_result_with_blocks_is_blocked():
     from kiro.application.lint_rules import Violation
 
-    r = LinterResult(
-        blocks=[Violation("r", "block", "f", "msg")],
-    )
+    r = LinterResult(blocks=[Violation("r", "block", "f", "msg")])
     assert r.is_blocked is True
 
 
@@ -102,65 +110,62 @@ def test_clean_article_passes():
     assert result.blocks == []
 
 
-def test_article_with_ope_code_blocked():
-    draft = _clean_article()
-    bad = ArticleDraft(
-        title=draft.title,
-        problem=draft.problem + " Relacionado a OPE-1234.",
-        cause=draft.cause,
-        solution=draft.solution,
-        faq=draft.faq,
-        tags=draft.tags,
+def test_article_with_ope_code_in_section_blocked():
+    bad = _clean_article().model_copy(
+        update={
+            "sections": [
+                Section(
+                    heading="Configurando push notifications",
+                    body=(
+                        "Relacionado a OPE-1234. Acesse o painel admin > "
+                        "Notificações pra ativar."
+                    ),
+                ),
+                _clean_article().sections[1],
+            ]
+        }
     )
     result = OutputLinter().check_article(bad)
     assert result.is_blocked is True
     assert any(v.rule_name == "no_ope_codes" for v in result.blocks)
 
 
-def test_article_with_internal_jargon_blocked():
-    draft = _clean_article()
-    bad = ArticleDraft(
-        title=draft.title,
-        problem=draft.problem,
-        cause="Identificamos a root cause como falha de sincronização.",
-        solution=draft.solution,
-        faq=draft.faq,
-        tags=draft.tags,
+def test_article_with_internal_jargon_in_scope_note_blocked():
+    bad = _clean_article().model_copy(
+        update={"scope_note": "Este artigo aborda a root cause das falhas em push."}
     )
     result = OutputLinter().check_article(bad)
     assert any(v.rule_name == "no_internal_jargon" for v in result.blocks)
 
 
-def test_article_with_few_steps_warns():
-    draft = _clean_article()
+def test_article_with_too_few_sections_warns():
+    """Artigo com 2 sections passa schema, mas linter warna (recomendado >=3)."""
     bad = ArticleDraft(
-        title=draft.title,
-        problem=draft.problem,
-        cause=draft.cause,
-        solution="1. um\n2. dois\n3. três",
-        faq=draft.faq,
-        tags=draft.tags,
+        title=_clean_article().title,
+        scope_note=_clean_article().scope_note,
+        sections=_clean_article().sections[:2],  # só 2
     )
     result = OutputLinter().check_article(bad)
     assert result.is_blocked is False
-    assert any(v.rule_name == "solution_step_count" for v in result.warns)
+    assert any(v.rule_name == "article_min_sections" for v in result.warns)
 
 
 def test_article_with_generic_phrase_warns():
-    draft = _clean_article()
-    bad = ArticleDraft(
-        title=draft.title,
-        problem=draft.problem,
-        cause=draft.cause,
-        solution=(
-            "Primeiro: verifique as configurações.\n"
-            "Em seguida acesse Configurações > Push.\n"
-            "Salve as alterações.\n"
-            "Teste o envio.\n"
-            "Caso persista, registre o caso."
-        ),
-        faq=draft.faq,
-        tags=draft.tags,
+    bad = _clean_article().model_copy(
+        update={
+            "sections": [
+                Section(
+                    heading="Como configurar",
+                    body=(
+                        "Primeiro: verifique as configurações.\n"
+                        "Em seguida ajuste no painel admin.\n"
+                        "Teste o envio."
+                    ),
+                ),
+                _clean_article().sections[1],
+                _clean_article().sections[2],
+            ]
+        }
     )
     result = OutputLinter().check_article(bad)
     assert any(v.rule_name == "generic_phrases" for v in result.warns)
@@ -174,17 +179,19 @@ def test_clean_faq_passes():
     assert result.is_blocked is False
 
 
-def test_faq_with_ope_code_blocked():
+def test_faq_with_ope_code_in_answer_blocked():
     bad = CustomerFAQ(
-        title="FAQ Push",
-        intro="Este FAQ cobre dúvidas comuns das equipes do varejista sobre push.",
+        title="Dúvidas sobre Push",
+        scope_note="Perguntas frequentes sobre push notifications.",
         entries=[
             FAQEntry(
                 question="Como ativar push?",
                 answer="Veja OPE-9999 pra detalhes técnicos.",
-            ),
-        ] * 5,
-        tags=["x"],
+            )
+        ] + [
+            FAQEntry(question=f"q{i}", answer="r" * 30) for i in range(4)
+        ],
+        tags=["push"],
     )
     result = OutputLinter().check_customer_faq(bad)
     assert any(v.rule_name == "no_ope_codes" for v in result.blocks)
@@ -192,11 +199,9 @@ def test_faq_with_ope_code_blocked():
 
 def test_faq_with_few_entries_warns():
     bad = CustomerFAQ(
-        title="FAQ",
-        intro="Intro suficientemente longa pra passar do mínimo configurado.",
-        entries=[
-            FAQEntry(question=f"q{i}", answer="r" * 30) for i in range(3)
-        ],
+        title="Dúvidas sobre Cashback",
+        scope_note="Perguntas frequentes sobre cashback.",
+        entries=[FAQEntry(question=f"q{i}", answer="r" * 30) for i in range(3)],
     )
     result = OutputLinter().check_customer_faq(bad)
     assert any(v.rule_name == "faq_entries_count" for v in result.warns)
@@ -227,13 +232,12 @@ def test_check_rejects_unknown_type():
 def test_multiple_violations_aggregated():
     bad = ArticleDraft(
         title="OPE-1 vazado",  # block: ope code
-        problem="curto",  # warn: muito curto
-        cause="root cause aqui",  # block: jargon
-        solution="só um passo",  # warn: poucos passos + curto
-        faq=[FAQItem(question="q", answer="r")],
+        scope_note="root cause aqui",  # block: jargon
+        sections=[
+            Section(heading="WebView falhando", body="Verifique."),  # block: component
+            Section(heading="ok", body="texto"),
+        ],
     )
     result = OutputLinter().check_article(bad)
-    # Múltiplos blocks e múltiplos warns
     assert len(result.blocks) >= 2
-    assert len(result.warns) >= 1
     assert result.is_blocked is True

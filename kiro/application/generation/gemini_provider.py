@@ -177,8 +177,6 @@ class GeminiProvider(LLMProvider):
         style_block = format_style_examples_block(style_examples)
         return f"""Você está escrevendo um artigo de documentação para o varejista (cliente B2B da Kobe — Amaro, Mr. Cat, Zaffari, Epharma, etc.) ler e se auto-resolver SEM precisar abrir chamado de suporte.
 
-Esse artigo será publicado no Confluence público da Kobe e lido pelas equipes de produto/operação do varejista. O leitor NÃO tem nenhum contexto interno da Kobe.
-
 ═══════════════════════════════════════════════════════════════
 CONTEXTO DO CLUSTER (tickets reais — USE como matéria-prima)
 ═══════════════════════════════════════════════════════════════
@@ -203,49 +201,67 @@ PROIBIÇÕES ABSOLUTAS — vazar isso quebra a confiança do cliente
 NUNCA mencione:
 - "Causa raiz", "bug", "workaround", "regressão", "root cause" (linguagem interna)
 - Códigos de ticket (OPE-XXX) — o varejista não tem acesso ao Jira
-- Nomes de componentes internos da Kobe (ex: "WebView", "SDK Connect", módulo X) — usar termos do produto do varejista
+- Nomes de componentes internos da Kobe (ex: "WebView", "SDK Connect") — use termos do produto do varejista
 - "O time interno", "engenharia", "nosso backlog", "sprint" — termos de quem está dentro
 - Código-fonte, SQL, comandos shell, stack trace
-- Suposições sobre o que é bug vs. feature — fale do COMPORTAMENTO observado
+- Estruturas tipo "Sobre este artigo", "Quando isso acontece", "Como resolver" — isso é relatório, não doc
 
 ═══════════════════════════════════════════════════════════════
-DIRETRIZES POSITIVAS
+ESTRUTURA EXIGIDA — siga o padrão dos artigos publicados pela Kobe
 ═══════════════════════════════════════════════════════════════
 
-1. ESCREVA COMO TUTORIAL/GUIA. O tom é "estamos te ensinando a usar". Não é
-   "esse problema acontece porque...". É "aqui está como configurar/usar X".
+O título DEVE identificar a FUNCIONALIDADE ou MÓDULO específico:
+  ✓ "Solução de Problemas com Push Notifications no App"
+  ✓ "Configurando Cashback por Loja Física"
+  ✓ "Entendendo o Modo Debug do Firebase no App"
+  ✗ "Otimizando a Execução de Testes" (genérico — qual módulo?)
+  ✗ "Análise de Performance e Configurações" (vago — sobre o quê?)
 
-2. PRESERVE OS FATOS DAS DESCRIÇÕES, MAS REFORMULE. Se a descrição diz "bug
-   na renderização da PDP", você escreve "ao exibir a página de produto, em
-   alguns casos a descrição pode aparecer cortada — siga estes passos".
+Depois do título, UMA frase de escopo (`scope_note`) — 1-2 frases curtas
+introduzindo brevemente DE QUE TRATA o artigo. NUNCA escreva "Sobre este
+artigo", "Sobre", "Visão Geral", "Introdução" — vá direto.
+  ✓ "Perguntas frequentes sobre push notifications no app."
+  ✓ "Como configurar e solucionar problemas comuns de cashback por loja."
 
-3. SEJA ACIONÁVEL. Cite caminhos REAIS no painel admin do varejista
-   ("Configurações > Integrações > X"), nomes de campos, etapas verificáveis.
+Em seguida, SECTIONS temáticas. CADA section tem:
+  - heading: PERGUNTA NATURAL como o cliente faria no chat ou TÓPICO específico
+    ✓ "Como ativar push notifications no painel"
+    ✓ "Push não está chegando no app iOS"
+    ✓ "O que é preciso para ativar o Deeplink"
+    ✗ "Quando isso acontece" (relatório)
+    ✗ "Como resolver" (relatório)
+    ✗ "Visão Geral" (preâmbulo desnecessário)
+  - body: conteúdo em MARKDOWN. Pode usar:
+    - listas (- item)
+    - sub-headings (### Título)
+    - tabelas markdown
+    - alertas precedidos de `> [warning]` ou `> [info]`
 
-4. DISTINGA PLATAFORMAS quando aplicável (iOS / Android).
+Mínimo 2 sections (schema). Ideal 3-5 sections cobrindo o tópico.
 
-5. Cada passo da solução começa com verbo no imperativo ("Verifique...",
-   "Acesse...", "Confirme..."). Mínimo 4 passos, ideal 5-8.
-
-6. A FAQ aborda perguntas que aparecem REALMENTE nos tickets — reformuladas
-   como o varejista perguntaria, não como o suporte interno descreve.
+DIRETRIZES POSITIVAS:
+- ESCREVA COMO TUTORIAL/GUIA — "estamos te ensinando a usar".
+- SEJA ACIONÁVEL. Cite caminhos REAIS ("Configurações > Integrações > X").
+- DISTINGA PLATAFORMAS quando aplicável (iOS / Android).
+- PERGUNTAS NATURAIS (curtas como no chat), não burocráticas ("Quais procedimentos...").
+- Passos com verbo no imperativo ("Verifique...", "Acesse...", "Confirme...").
 {style_block}
 ═══════════════════════════════════════════════════════════════
-FORMATO DE RESPOSTA — JSON válido, sem markdown
+FORMATO DE RESPOSTA — JSON válido, sem markdown fences
 ═══════════════════════════════════════════════════════════════
 
-Os campos abaixo têm RÓTULOS legados (problem/cause/solution), mas o conteúdo
-deve seguir essa SEMÂNTICA EXTERNA:
-
 {{
-  "title": "Título objetivo, em linguagem do varejista (5-12 palavras)",
-  "problem": "**Sobre este artigo**: contextualiza o tema em 2-4 frases, sem mencionar bugs. Descreve o cenário que o varejista pode enfrentar.",
-  "cause": "**Quando isso acontece**: situações ou configurações em que o cenário aparece (2-4 frases). NÃO usar 'causa raiz'. Algo como: 'Esse comportamento pode ocorrer quando...'",
-  "solution": "**Como resolver/configurar**: passos numerados separados por \\n. 4-8 passos acionáveis no painel/app do varejista.",
-  "faq": [
-    {{"question": "Pergunta real que o varejista faria", "answer": "Resposta direta, sem jargão interno"}},
-    {{"question": "...", "answer": "..."}},
-    {{"question": "...", "answer": "..."}}
+  "title": "Título objetivo IDENTIFICANDO funcionalidade/módulo (5-12 palavras)",
+  "scope_note": "1-2 frases curtas dizendo de que trata o artigo. SEM preâmbulo.",
+  "sections": [
+    {{
+      "heading": "Pergunta natural OU tópico específico (curto)",
+      "body": "Markdown completo da section: parágrafos, listas, sub-headings, callouts."
+    }},
+    {{
+      "heading": "...",
+      "body": "..."
+    }}
   ],
   "tags": ["5 a 8 tags do domínio do varejista"]
 }}"""
@@ -281,9 +297,7 @@ deve seguir essa SEMÂNTICA EXTERNA:
             )
         kb_block = format_kb_context_block(kb_context)
         style_block = format_style_examples_block(style_examples)
-        return f"""Você é especialista em escrever FAQs self-service para clientes B2B da Kobe — empresa que desenvolve aplicativos móveis para grandes varejistas brasileiros (Amaro, Mr. Cat, Zaffari, Epharma, etc.).
-
-Sua tarefa: gerar um documento de Perguntas Frequentes que **o time de produto/operação do varejista** possa consultar ANTES de abrir um chamado de suporte. Ou seja, escrever conteúdo que o cliente leia e se resolva sozinho.
+        return f"""Você está escrevendo um FAQ self-service para o time de produto/operação do varejista (cliente B2B da Kobe — Amaro, Mr. Cat, Zaffari, Epharma, etc.) consultar ANTES de abrir chamado.
 
 ═══════════════════════════════════════════════════════════════
 CONTEXTO DO CLUSTER (tickets reais que viraram esta FAQ)
@@ -303,56 +317,70 @@ Descrições detalhadas (até 3 tickets com mais conteúdo):
 ─────────────────────────────────────────────────────────────
 {kb_block}
 ═══════════════════════════════════════════════════════════════
-QUEM É O LEITOR (importante)
+QUEM É O LEITOR
 ═══════════════════════════════════════════════════════════════
 
 Equipes de PRODUTO ou OPERAÇÃO do varejista. NÃO são desenvolvedores, mas têm:
 - Acesso ao painel admin Kobe (CMS/configurações)
-- Familiaridade com termos como SDK, integração, push notification, deeplink
+- Familiaridade com termos como SDK, integração, push, deeplink
 - Capacidade de configurar campanhas, produtos, regras de cashback
 
-NÃO assume conhecimento de: código, SQL, comandos shell, debugging, root cause análise.
-
 ═══════════════════════════════════════════════════════════════
-DIRETRIZES OBRIGATÓRIAS
+ESTRUTURA EXIGIDA — FAQ simples e direta, no padrão Kobe
 ═══════════════════════════════════════════════════════════════
 
-1. CADA PERGUNTA é uma dúvida REAL que apareceu nos tickets — reformule no tom de quem está perguntando ("Por que...?", "Como faço para...?", "O que devo fazer quando...?").
+Estrutura referência (artigos publicados pela Kobe — siga este padrão):
 
-2. CADA RESPOSTA é acionável em 2-5 frases:
-   - O que verificar (no painel? no app? na configuração?)
-   - O passo a passo curto
+  TÍTULO  → identifica funcionalidade ou problema específico:
+    ✓ "Dúvidas sobre Push Notifications no App"
+    ✓ "Solução de Problemas com Deeplink no App"
+    ✗ "Análise de Performance" (genérico)
+
+  SCOPE NOTE  → 1 frase curta dizendo do que trata. Sem preâmbulo elaborado.
+    ✓ "Perguntas frequentes sobre push notifications no app."
+    ✗ "Este FAQ cobre as dúvidas mais comuns das equipes de produto..." (longo demais)
+
+  ENTRIES  → cada uma é uma PERGUNTA DIRETA + resposta acionável.
+    ✓ "Como ativo push no painel?" → "Acesse Configurações > Notificações."
+    ✓ "Deeplink não está abrindo o app, o que verificar?" → resposta curta.
+    ✗ "Quais procedimentos devem ser seguidos para habilitação do recurso..."
+
+REGRAS DE QUALIDADE:
+
+1. PERGUNTAS NATURAIS — como o cliente faria no chat. Curtas, diretas. NÃO
+   burocráticas. Imagine o cliente digitando no Slack do suporte.
+
+2. RESPOSTAS ACIONÁVEIS em 2-5 frases:
+   - O que verificar (painel? app? configuração?)
+   - Passo a passo curto
    - O que esperar como resultado
 
-3. `when_to_contact` é OPCIONAL:
-   - Preencher SE há cenário em que a auto-resolução não funciona
-   - Format: "Se mesmo após verificar X, Y, Z, o problema persistir, abra um ticket de suporte fornecendo: [lista do que enviar — print, log de horário, exemplo de tela]"
-   - Deixar `null` se a resposta resolve sempre.
+3. `when_to_contact` (opcional, normalmente `null`):
+   - Preencher SÓ se há cenário em que a auto-resolução não funciona
+   - Format: "Se mesmo após verificar X, Y, Z, o problema persistir, abra ticket fornecendo: [lista do que enviar]"
 
 4. NUNCA mencione:
-   - Causa raiz interna (não dizer "é bug de WebView", apenas "configuração X precisa ser revisada")
-   - Códigos de ticket internos (OPE-XXX) — varejista não tem acesso ao Jira
+   - Causa raiz interna ("é bug de WebView") — use "configuração X precisa ser revisada"
+   - Códigos de ticket (OPE-XXX) — varejista não tem acesso ao Jira
    - Código-fonte, SQL, comandos shell
-   - "Entre em contato com o suporte" sem antes esgotar o que o cliente pode fazer
+   - "Sobre este FAQ" / "Visão Geral" / "Introdução" — vá direto pras perguntas
 
-5. INTRO do documento (campo `intro`): 2-3 frases dizendo qual é o tópico e a quem se destina.
-
-6. MÍNIMO 5 entries. IDEAL 7-10.
+5. MÍNIMO 5 entries (schema). IDEAL 7-10 — cobertura ampla, ainda direta.
 {style_block}
 ═══════════════════════════════════════════════════════════════
-FORMATO DE RESPOSTA
+FORMATO DE RESPOSTA — JSON válido, sem markdown fences
 ═══════════════════════════════════════════════════════════════
 
-Responda APENAS com JSON válido, sem markdown, sem texto adicional:
+Responda APENAS com JSON válido, sem texto adicional:
 
 {{
-  "title": "Título curto do tópico FAQ (5-12 palavras)",
-  "intro": "Parágrafo curto introduzindo o tema — quem deve ler e o que vai aprender",
+  "title": "Título identificando funcionalidade (ex: 'Dúvidas sobre Push Notifications no App')",
+  "scope_note": "1 frase curta dizendo de que trata a FAQ. SEM preâmbulo.",
   "entries": [
     {{
-      "question": "Pergunta direta como o leitor faria",
+      "question": "Pergunta natural curta como o cliente faria no chat",
       "answer": "Resposta acionável em 2-5 frases",
-      "when_to_contact": "Texto opcional sobre quando escalar pra suporte, ou null"
+      "when_to_contact": "Texto opcional sobre quando escalar pra suporte, OU null"
     }}
   ],
   "tags": ["5 a 8 tags específicas"]

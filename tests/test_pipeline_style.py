@@ -12,6 +12,7 @@ from kiro.domain.models import (
     CustomerFAQ,
     FAQEntry,
     GitBookChunk,
+    Section,
 )
 
 
@@ -30,7 +31,14 @@ class _CapturingLLM(LLMProvider):
     ) -> ArticleDraft:
         self.last_kb_context = kb_context
         self.last_style_examples = style_examples
-        return ArticleDraft(title="t", problem="p", cause="c", solution="s")
+        return ArticleDraft(
+            title="Solução para t",
+            scope_note="scope",
+            sections=[
+                Section(heading="h1", body="b1"),
+                Section(heading="h2", body="b2"),
+            ],
+        )
 
     def generate_customer_faq(
         self,
@@ -41,8 +49,8 @@ class _CapturingLLM(LLMProvider):
         self.last_kb_context = kb_context
         self.last_style_examples = style_examples
         return CustomerFAQ(
-            title="t",
-            intro="i",
+            title="Dúvidas sobre t",
+            scope_note="scope",
             entries=[
                 FAQEntry(question="q1", answer="a1"),
                 FAQEntry(question="q2", answer="a2"),

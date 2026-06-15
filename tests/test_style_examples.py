@@ -123,7 +123,8 @@ def test_style_block_appears_after_diretrizes_before_formato_in_faq():
     examples = [_chunk("X", "y", "exemplo")]
     prompt = GeminiProvider._build_customer_faq_prompt(_cluster(), style_examples=examples)
     style_idx = prompt.index("EXEMPLOS DO ESTILO KOBE")
-    directives_idx = prompt.index("DIRETRIZES OBRIGATÓRIAS")
+    # Após issue #15: bloco "REGRAS DE QUALIDADE" no FAQ (era "DIRETRIZES OBRIGATÓRIAS")
+    directives_idx = prompt.index("REGRAS DE QUALIDADE")
     format_idx = prompt.index("FORMATO DE RESPOSTA")
     assert directives_idx < style_idx < format_idx
 

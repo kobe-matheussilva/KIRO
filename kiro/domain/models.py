@@ -38,31 +38,50 @@ class Cluster(BaseModel):
         return len(self.tickets)
 
 
-class FAQItem(BaseModel):
-    question: str = Field(..., min_length=1)
-    answer: str = Field(..., min_length=1)
+class Section(BaseModel):
+    """Section de Artigo no padrão SUP (issue #15).
+
+    `heading` deve nomear uma pergunta natural ou tópico específico ("Como
+    ativar X", "Y não está funcionando"). NÃO é estrutura de relatório
+    ("Sobre este artigo", "Visão Geral", "Como resolver").
+
+    `body` é markdown — pode incluir listas, sub-headings (###), tabelas,
+    callouts `> [warning]` / `> [info]`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    heading: str = Field(..., min_length=1)
+    body: str = Field(..., min_length=1)
 
 
 class ArticleDraft(BaseModel):
-    """Artigo de Base de Conhecimento INTERNO (público: time de suporte Kobe).
+    """Artigo de documentação para o cliente B2B da Kobe (issue #15).
 
-    Estrutura diagnóstica — problema/causa/solução/FAQ. Tom técnico,
-    pode mencionar root cause e workarounds internos.
+    Estrutura inspirada nos artigos publicados pelo Suporte da Kobe no
+    Confluence space SUP — exemplo de referência: "Solução de Problemas
+    com Deeplink no App" (page 87588885).
+
+    - `title`: nomeia a funcionalidade ou módulo (NÃO genérico).
+       Bom: "Solução de Problemas com Push Notifications no App".
+       Ruim: "Otimizando a Execução de Testes no Aplicativo".
+    - `scope_note`: 1-2 frases dizendo de que trata o artigo. Sem
+       preâmbulos tipo "Sobre este artigo" — vai direto.
+    - `sections`: sequência de tópicos. Cada section é um H2 com perguntas
+       naturais ou tópicos específicos como heading. Mínimo 2, ideal 3-5.
     """
 
     title: str = Field(..., min_length=1)
-    problem: str = Field(..., min_length=1)
-    cause: str = Field(..., min_length=1)
-    solution: str = Field(..., min_length=1)
-    faq: list[FAQItem] = Field(default_factory=list)
+    scope_note: str = Field(..., min_length=1)
+    sections: list[Section] = Field(..., min_length=2)
     tags: list[str] = Field(default_factory=list)
 
 
 class FAQEntry(BaseModel):
     """Uma entrada de FAQ self-service voltada ao varejista B2B.
 
-    Diferente de FAQItem (que vive dentro de ArticleDraft do KB interno),
-    esta tem `when_to_contact` opcional indicando quando escalar para suporte.
+    `when_to_contact` opcional indica quando escalar para suporte —
+    preencher só se a auto-resolução não cobre todos os cenários.
     """
 
     question: str = Field(..., min_length=1)
@@ -82,18 +101,21 @@ class FAQEntry(BaseModel):
 
 
 class CustomerFAQ(BaseModel):
-    """Documento FAQ self-service para varejistas B2B clientes da Kobe.
+    """FAQ self-service para o cliente B2B da Kobe (issue #15).
 
-    Audiência: equipes de produto/operação de Amaro, Mr.Cat, Zaffari, Epharma, etc.
-    Tom: direto, instrucional, sem jargão de engenharia. Pode citar "no painel admin",
-    "via SDK", "na seção X da integração".
+    Estrutura simplificada após feedback da chefe (2026-06-14): cliente
+    no chat faz perguntas DIRECIONADAS. FAQ deve refletir isso — sem
+    preâmbulo elaborado, direto pras Q&As.
 
-    Gerado em paralelo ao ArticleDraft a partir do MESMO cluster — atende a chefe
-    que pediu "documentos pro cliente ler sem precisar abrir chamado".
+    - `title`: identifica funcionalidade ("Dúvidas sobre Cashback por Loja"
+       ou "Solução de Problemas com Push Notifications").
+    - `scope_note`: 1 frase curta de escopo (substitui o `intro` longo
+       da V1 que parecia abertura de relatório).
+    - `entries`: mínimo 3 (Pydantic enforça); recomendado 5+.
     """
 
     title: str = Field(..., min_length=1)
-    intro: str = Field(..., min_length=1)
+    scope_note: str = Field(..., min_length=1)
     entries: list[FAQEntry] = Field(..., min_length=3)
     tags: list[str] = Field(default_factory=list)
 
