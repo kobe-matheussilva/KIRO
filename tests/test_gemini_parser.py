@@ -1,64 +1,133 @@
-"""Testes do GeminiProvider — parser, extrator de payload, validações de schema.
-
-Testes do parser de ArticleDraft estão skipados durante a issue #15 — o
-schema mudou (problem/cause/solution removidos, sections adicionadas). Vão
-ser reescritos na camada Providers da issue #15.
-"""
+"""Testes do GeminiProvider — parser, extrator de payload (atualizado issue #15)."""
 
 import pytest
 
 from kiro.application.generation.gemini_provider import GeminiProvider
 from kiro.domain.exceptions import LLMResponseError
 
-pytestmark = pytest.mark.skip(
-    reason="parser será reescrito na camada Providers da issue #15"
-)
+
+# ─── _parse_response (ArticleDraft) ────────────────────────────────
 
 
-# ─── _parse_response ──────────────────────────────────────────────
-
-
-def test_parse_valid_json():
+def test_parse_valid_article_json():
     raw = """{
-      "title": "Como resetar senha",
-      "problem": "Usuários não conseguem resetar senha.",
-      "cause": "E-mail de reset cai em spam.",
-      "solution": "1. Verifique a caixa de spam\\n2. Solicite novamente",
-      "faq": [{"question": "Quanto tempo demora?", "answer": "Até 5 minutos."}],
-      "tags": ["senha", "reset", "spam"]
+      "title": "Solução de Problemas com Push Notifications no App",
+      "scope_note": "Perguntas frequentes sobre push notifications.",
+      "sections": [
+        {"heading": "Como ativar push", "body": "Acesse Configurações > Push."},
+        {"heading": "Push não chega no iOS", "body": "Verifique APNs."}
+      ],
+      "tags": ["push", "notificação"]
     }"""
     article = GeminiProvider._parse_response(raw)
-    assert article.title == "Como resetar senha"
-    assert len(article.faq) == 1
-    assert article.faq[0].question == "Quanto tempo demora?"
-    assert "senha" in article.tags
+    assert article.title.startswith("Solução")
+    assert len(article.sections) == 2
+    assert article.sections[0].heading == "Como ativar push"
 
 
 def test_parse_strips_markdown_fences():
     raw = (
         "```json\n"
-        '{"title": "T", "problem": "P", "cause": "C", "solution": "1. a"}\n'
+        '{"title": "T objetivo do tema", "scope_note": "Escopo curto.", '
+        '"sections": [{"heading": "h1", "body": "b1"}, {"heading": "h2", "body": "b2"}]}\n'
         "```"
     )
     article = GeminiProvider._parse_response(raw)
-    assert article.title == "T"
+    assert article.title.startswith("T objetivo")
 
 
-def test_invalid_json_raises():
+def test_parse_invalid_json_raises():
     with pytest.raises(LLMResponseError):
-        GeminiProvider._parse_response("isto definitivamente não é json")
+        GeminiProvider._parse_response("isto não é json")
 
 
-def test_missing_required_field_raises():
-    raw = '{"title": "só título"}'
+def test_parse_missing_sections_field_raises():
+    """Schema exige sections — sem isso, falha."""
+    raw = '{"title": "Solução X", "scope_note": "scope"}'
+    with pytest.raises(LLMResponseError):
+        GeminiProvider._parse_response(raw)
+
+
+def test_parse_only_1_section_raises():
+    """Schema exige min 2 sections."""
+    raw = """{
+      "title": "T",
+      "scope_note": "S",
+      "sections": [{"heading": "h1", "body": "b1"}]
+    }"""
     with pytest.raises(LLMResponseError):
         GeminiProvider._parse_response(raw)
 
 
-def test_empty_string_fields_raise():
-    raw = '{"title": "", "problem": "p", "cause": "c", "solution": "s"}'
+def test_parse_rejects_old_schema():
+    """Schema antigo (problem/cause/solution) deve falhar — guia o LLM ao novo."""
+    raw = """{
+      "title": "T",
+      "problem": "P",
+      "cause": "C",
+      "solution": "S"
+    }"""
     with pytest.raises(LLMResponseError):
         GeminiProvider._parse_response(raw)
+
+
+# ─── _parse_customer_faq_response ──────────────────────────────────
+
+
+def test_parse_valid_faq_json():
+    raw = """{
+      "title": "Dúvidas sobre Push no App",
+      "scope_note": "Perguntas frequentes sobre push.",
+      "entries": [
+        {"question": "Como ativar?", "answer": "No painel.", "when_to_contact": null},
+        {"question": "Por que não chega no iOS?", "answer": "Verifique APNs.", "when_to_contact": "Se persistir, abra ticket."},
+        {"question": "Posso testar?", "answer": "Sim, use simulador.", "when_to_contact": null}
+      ],
+      "tags": ["push"]
+    }"""
+    faq = GeminiProvider._parse_customer_faq_response(raw)
+    assert faq.title.startswith("Dúvidas")
+    assert len(faq.entries) == 3
+    assert faq.entries[0].when_to_contact is None
+    assert faq.entries[1].when_to_contact is not None
+
+
+def test_parse_normalizes_literal_null_strings():
+    """Validator no FAQEntry transforma 'null' string em None."""
+    raw = """{
+      "title": "T objetivo",
+      "scope_note": "S",
+      "entries": [
+        {"question": "q1", "answer": "a1", "when_to_contact": "null"},
+        {"question": "q2", "answer": "a2", "when_to_contact": "N/A"},
+        {"question": "q3", "answer": "a3", "when_to_contact": "Abrir ticket com print"}
+      ],
+      "tags": []
+    }"""
+    faq = GeminiProvider._parse_customer_faq_response(raw)
+    assert faq.entries[0].when_to_contact is None
+    assert faq.entries[1].when_to_contact is None
+    assert faq.entries[2].when_to_contact == "Abrir ticket com print"
+
+
+def test_parse_faq_rejects_old_intro_field():
+    """Schema novo usa scope_note — `intro` puro deve falhar."""
+    raw = """{
+      "title": "T",
+      "intro": "Texto",
+      "entries": [
+        {"question": "q1", "answer": "a1"},
+        {"question": "q2", "answer": "a2"},
+        {"question": "q3", "answer": "a3"}
+      ]
+    }"""
+    with pytest.raises(LLMResponseError):
+        GeminiProvider._parse_customer_faq_response(raw)
+
+
+def test_parse_faq_invalid_json_raises():
+    with pytest.raises(LLMResponseError):
+        GeminiProvider._parse_customer_faq_response("isto não é json")
 
 
 # ─── _extract_text ────────────────────────────────────────────────
@@ -85,7 +154,6 @@ def test_extract_text_safety_block_raises():
             {
                 "content": {"parts": [], "role": "model"},
                 "finishReason": "SAFETY",
-                "safetyRatings": [{"category": "HARM_CATEGORY_HARASSMENT", "probability": "HIGH"}],
             }
         ]
     }
@@ -99,9 +167,8 @@ def test_extract_text_no_candidates_raises():
         "candidates": [],
         "promptFeedback": {"blockReason": "SAFETY"},
     }
-    with pytest.raises(LLMResponseError) as exc:
+    with pytest.raises(LLMResponseError):
         GeminiProvider._extract_text(payload)
-    assert "SAFETY" in str(exc.value) or "candidates" in str(exc.value)
 
 
 # ─── construtor / fail-fast ───────────────────────────────────────

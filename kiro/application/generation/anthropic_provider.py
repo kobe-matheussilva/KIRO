@@ -127,83 +127,13 @@ class AnthropicProvider(LLMProvider):
         kb_context: Sequence[GitBookChunk] = (),
         style_examples: Sequence[GitBookChunk] = (),
     ) -> str:
-        summaries = "\n".join(f"- {s}" for s in cluster.summaries) or "(nenhum)"
-        labels = ", ".join(cluster.labels) or "nenhuma"
-        components = ", ".join(cluster.components) or "não identificados"
-        if cluster.sample_descriptions:
-            descriptions_block = "\n\n".join(cluster.sample_descriptions)
-        else:
-            descriptions_block = (
-                "(tickets sem `description` preenchida — use os títulos acima como única fonte)"
-            )
-        kb_block = format_kb_context_block(kb_context)
-        style_block = format_style_examples_block(style_examples)
-        return f"""Você é um especialista em documentação técnica de suporte ao cliente da Kobe — empresa que desenvolve aplicativos móveis (iOS e Android) para grandes varejistas brasileiros (ex.: Amaro, Mr. Cat, Zaffari, Epharma).
+        """Delega pro Gemini — o conteúdo é agnostic de provedor (issue #15).
 
-Sua tarefa: produzir um artigo de Base de Conhecimento **acertivo, específico e acionável**, em português do Brasil, a partir de tickets reais de suporte agrupados por similaridade.
-
-═══════════════════════════════════════════════════════════════
-CONTEXTO DO CLUSTER
-═══════════════════════════════════════════════════════════════
-
-Tema identificado: {cluster.topic}
-Total de tickets recorrentes no período: {cluster.count}
-Labels Jira aplicadas: {labels}
-Componentes/módulos afetados: {components}
-
-Títulos dos tickets de exemplo:
-{summaries}
-
-Descrições detalhadas (até 3 tickets com mais conteúdo):
-─────────────────────────────────────────────────────────────
-{descriptions_block}
-─────────────────────────────────────────────────────────────
-{kb_block}
-═══════════════════════════════════════════════════════════════
-DIRETRIZES OBRIGATÓRIAS — leia antes de escrever
-═══════════════════════════════════════════════════════════════
-
-1. SEJA ESPECÍFICO. Cite mensagens de erro reais, nomes de telas/campos, fluxos
-   e plataformas (iOS/Android) que aparecem nas descrições. Evite frases vagas.
-
-2. NÃO use bullets genéricos como "verifique as configurações", "limpe o cache"
-   sem dizer EXATAMENTE o quê verificar/limpar e em qual menu.
-
-3. NÃO INVENTE causa. Se as descrições não dão pista da raiz, escreva:
-   "Causa a investigar" + 2-3 hipóteses concretas baseadas no padrão observado.
-
-4. DISTINGA PLATAFORMAS quando aplicável: se um problema só aparece em iOS,
-   diga "Em iOS:" antes do passo. Mesmo pra Android. Se atinge os dois, separe.
-
-5. A FAQ deve antecipar dúvidas REAIS dos clientes/atendentes baseado nos
-   tickets — perguntas que apareceram nas descrições. Evite perguntas genéricas
-   tipo "o que é deeplink".
-
-6. Cada passo da solução deve ser ACIONÁVEL: começa com verbo no imperativo
-   ("Verifique...", "Abra...", "Limpe..."), menciona caminhos (Configurações →
-   X → Y) ou comandos quando aplicável. Mínimo 4 passos, ideal 5-8.
-
-7. O cliente da Kobe é tipicamente um **varejista** — fala numa linguagem
-   que faz sentido pra equipe de suporte de e-commerce/PDV, não pra usuário leigo.
-{style_block}
-═══════════════════════════════════════════════════════════════
-FORMATO DE RESPOSTA
-═══════════════════════════════════════════════════════════════
-
-Responda APENAS com JSON válido, sem markdown, sem texto adicional. Estrutura:
-
-{{
-  "title": "Título objetivo de 5-12 palavras",
-  "problem": "Descrição do problema da perspectiva do cliente, 2-4 frases. Mencione sintomas específicos vistos nas descrições.",
-  "cause": "Causa raiz mais provável, baseada nas descrições. Se incerta, comece com 'Causa a investigar' e liste hipóteses. 2-4 frases.",
-  "solution": "Passos numerados separados por \\n. 4-8 passos acionáveis.",
-  "faq": [
-    {{"question": "Pergunta real que cliente/atendente faria", "answer": "Resposta direta e específica"}},
-    {{"question": "...", "answer": "..."}},
-    {{"question": "...", "answer": "..."}}
-  ],
-  "tags": ["5 a 8 tags específicas, sem genéricos"]
-}}"""
+        Mantém um único prompt pro Article evita divergência entre providers
+        e simplifica manutenção. Mesmo padrão usado pro FAQ desde a V1.0.1.
+        """
+        from kiro.application.generation.gemini_provider import GeminiProvider
+        return GeminiProvider._build_prompt(cluster, kb_context, style_examples)
 
     @staticmethod
     def _parse_response(raw: str) -> ArticleDraft:
