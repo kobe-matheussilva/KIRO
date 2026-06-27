@@ -37,6 +37,73 @@ Confluence ou sem Slack — KIRO continua produzindo os drafts em `output/drafts
 
 ## Setup
 
+### Opção recomendada: script de setup
+
+Use o script para automatizar o bootstrap do ambiente:
+
+```bash
+bash kiro/setup_env.sh
+source .venv/bin/activate
+```
+
+O script `kiro/setup_env.sh` faz:
+
+1. escolhe um Python com suporte a `venv` (`PYTHON_BIN` tem prioridade, se definido)
+2. cria/recria `.venv` quando necessário
+3. ativa o `.venv` durante a execução
+4. instala dependências de `requirements.txt`
+5. cria `.env` a partir de `.env.example` (se ainda não existir)
+6. no macOS/Homebrew, aplica workaround automático para erro de `pyexpat`/`ensurepip`
+
+Modo estrito (recomendado para CI ou troubleshooting):
+
+```bash
+PYTHON_BIN=python3.12 STRICT_SETUP=1 bash kiro/setup_env.sh
+source .venv/bin/activate
+```
+
+Importante:
+
+- Não rode `source kiro/setup_env.sh` no zsh.
+- O script é suficiente para preparar o ambiente local (venv + dependências + `.env` inicial).
+- Ainda é necessário editar o `.env` com credenciais reais.
+- Ao abrir um terminal novo, ative novamente o venv com `source .venv/bin/activate`.
+
+### Como obter o token de API do Jira (Atlassian)
+
+Para conseguir um token de API do Jira (Atlassian), acesse a página oficial de Gerenciamento de Tokens da Atlassian:
+
+- https://id.atlassian.com/manage/api-tokens
+
+Clique em **Criar token de API**, dê um nome para ele e salve o valor imediatamente.
+
+Passo a passo:
+
+1. Acesse o portal da sua conta Atlassian pela página de gerenciamento de conta e entre na aba **Segurança**.
+2. Procure a opção **Criar e gerenciar tokens de API** e clique nela.
+3. Clique no botão **Criar token de API**.
+4. Insira um rótulo para identificar o uso do token (ex.: `Script-Integracao-Jira`) e clique em **Criar**.
+5. Copie o token exibido e guarde em local seguro (cofre de senhas), pois ele não poderá ser visualizado novamente após fechar a janela.
+
+Depois disso, preencha no `.env`:
+
+- `JIRA_USER_EMAIL` com o e-mail da conta Atlassian
+- `JIRA_API_TOKEN` com o token recém-criado
+
+### Como obter a API key do Google AI Studio (Gemini)
+
+1. Acesse o [Google AI Studio](https://aistudio.google.com/?hl=pt-br).
+2. Se necessário, aceite os termos de serviço e faça login na sua conta Google.
+3. No menu lateral esquerdo, clique em **Get API key**.
+4. Clique em **Create API key**.
+
+Depois disso, preencha no `.env`:
+
+- `LLM_PROVIDER=gemini`
+- `LLM_API_KEY` com a chave criada
+
+### Opção manual (equivalente)
+
 ```bash
 # 1. cria o venv (só na primeira vez)
 python3 -m venv .venv
@@ -305,6 +372,8 @@ provedor de LLM não toca em `domain/` nem em `application/pipeline.py`.
 | `Gemini sem candidates (blockReason=...)` | prompt foi bloqueado antes da geração | Mesma orientação acima; verifique também tamanho do prompt vs. `LLM_MAX_TOKENS` |
 | `Slack retornou 404` | webhook revogado | Recrie o webhook e atualize `SLACK_WEBHOOK_URL` |
 | Nenhum cluster gerado | janela curta ou `MIN_CLUSTER_SIZE` alto | Aumente `LOOKBACK_DAYS` ou baixe `CLUSTER_MIN_SIZE`/`CLUSTER_OVERLAP_THRESHOLD` |
+| `configuração inválida` com campos obrigatórios ausentes | `.env` não foi encontrado/carregado ou está incompleto | Rode `bash kiro/setup_env.sh`, confira se `.env` existe na raiz e valide com `python -m kiro config-check` |
+| `0 tickets coletados` no fetch | projeto/status/JQL/permissão não retornaram itens na janela | Verifique `JIRA_PROJECT_KEY`, `JIRA_CLOSED_STATUSES`, `LOOKBACK_DAYS`, `JIRA_EXTRA_JQL` e teste no Jira com a mesma JQL |
 
 ---
 

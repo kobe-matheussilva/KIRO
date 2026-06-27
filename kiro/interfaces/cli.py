@@ -145,10 +145,17 @@ def _stages_for(stage: str) -> tuple[str, ...]:
 
 
 def _load_settings() -> Settings:
+    env_file = Path(str(Settings.model_config.get("env_file", ".env"))).expanduser()
     try:
         return Settings()
     except ValidationError as e:
-        raise ConfigError(str(e)) from e
+        hint = ""
+        if not env_file.exists():
+            hint = (
+                "\n[hint] arquivo .env não encontrado em "
+                f"{env_file}. Rode: bash kiro/setup_env.sh"
+            )
+        raise ConfigError(f"{e}{hint}") from e
 
 
 def _build_pipeline(
