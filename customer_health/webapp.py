@@ -141,23 +141,20 @@ def _form_html(defaults: RelationshipSettings | None, message: str = "") -> str:
     <div class=\"row\">
       <div>
         <label>Jira Base URL</label>
-        <input name=\"jira_base_url\" value=\"{escape(defaults.jira_base_url if defaults else '')}\" placeholder=\"https://sua-empresa.atlassian.net\" required />
+        <input value=\"{escape(defaults.jira_base_url if defaults else 'defina JIRA_BASE_URL no .env')}\" disabled />
       </div>
       <div>
         <label>Project Key</label>
-        <input name=\"jira_project_key\" value=\"{escape(defaults.jira_project_key if defaults else '')}\" placeholder=\"SUPP\" required />
+        <input value=\"{escape(defaults.jira_project_key if defaults else 'defina JIRA_PROJECT_KEY no .env')}\" disabled />
       </div>
     </div>
     <div class=\"row\">
       <div>
         <label>E-mail Jira</label>
-        <input name=\"jira_user_email\" value=\"{escape(defaults.jira_user_email if defaults else '')}\" required />
-      </div>
-      <div>
-        <label>Jira API Token</label>
-        <input name=\"jira_api_token\" type=\"password\" required />
+        <input value=\"{escape(defaults.jira_user_email if defaults else 'defina JIRA_USER_EMAIL no .env')}\" disabled />
       </div>
     </div>
+    <p class=\"hint\">Configuração do Jira carregada do ambiente (.env).</p>
 
     <h2>2) IA</h2>
     <div class=\"row\">
@@ -294,123 +291,128 @@ class CustomerHealthHandler(BaseHTTPRequestHandler):
     self.wfile.write(body)
     return True
 
-    def _output_root(self) -> Path:
-        return Path("output/customer_relationship").resolve()
+  def _output_root(self) -> Path:
+    return Path("output/customer_relationship").resolve()
 
-    def _send_file(self, file_path: Path) -> None:
-        root = self._output_root()
-        target = file_path.resolve()
-        if root not in target.parents or not target.is_file():
-            self._send_html(_render_page("<div class='card'>Arquivo não encontrado.</div>"), status=404)
-            return
+  def _send_file(self, file_path: Path) -> None:
+    root = self._output_root()
+    target = file_path.resolve()
+    if root not in target.parents or not target.is_file():
+      self._send_html(_render_page("<div class='card'>Arquivo não encontrado.</div>"), status=404)
+      return
 
-        if target.suffix.lower() != ".md":
-            self._send_html(_render_page("<div class='card'>Apenas download de Markdown está disponível.</div>"), status=400)
-            return
+    if target.suffix.lower() != ".md":
+      self._send_html(_render_page("<div class='card'>Apenas download de Markdown está disponível.</div>"), status=400)
+      return
 
-        content = target.read_bytes()
-        content_type = "text/markdown; charset=utf-8"
+    content = target.read_bytes()
+    content_type = "text/markdown; charset=utf-8"
 
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Disposition", f"attachment; filename={target.name}")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
+    self.send_response(200)
+    self.send_header("Content-Type", content_type)
+    self.send_header("Content-Disposition", f"attachment; filename={target.name}")
+    self.send_header("Content-Length", str(len(content)))
+    self.end_headers()
+    self.wfile.write(content)
 
-    def _defaults(self) -> RelationshipSettings | None:
-        try:
-            return RelationshipSettings()
-        except Exception:
-            return None
+  def _defaults(self) -> RelationshipSettings | None:
+    try:
+      return RelationshipSettings()
+    except Exception:
+      return None
 
-    def _send_html(self, body: bytes, status: int = 200) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+  def _send_html(self, body: bytes, status: int = 200) -> None:
+    self.send_response(status)
+    self.send_header("Content-Type", "text/html; charset=utf-8")
+    self.send_header("Content-Length", str(len(body)))
+    self.end_headers()
+    self.wfile.write(body)
 
-    def do_GET(self) -> None:  # noqa: N802
-      if self._require_auth():
+  def do_GET(self) -> None:  # noqa: N802
+    if self._require_auth():
+      return
+
+    parsed = urlparse(self.path)
+    if parsed.path == "/download":
+      query = parse_qs(parsed.query)
+      raw_file = _first(query, "file").strip()
+      if not raw_file:
+        self._send_html(_render_page("<div class='card'>Parâmetro de download ausente.</div>"), status=400)
         return
+      self._send_file(Path(raw_file))
+      return
 
-        parsed = urlparse(self.path)
-        if parsed.path == "/download":
-            query = parse_qs(parsed.query)
-            raw_file = _first(query, "file").strip()
-            if not raw_file:
-                self._send_html(_render_page("<div class='card'>Parâmetro de download ausente.</div>"), status=400)
-                return
-            self._send_file(Path(raw_file))
-            return
+    if parsed.path != "/":
+      self._send_html(_render_page("<div class='card'>Página não encontrada.</div>"), status=404)
+      return
+    body = _render_page(_form_html(self._defaults()))
+    self._send_html(body)
 
-        if parsed.path != "/":
-            self._send_html(_render_page("<div class='card'>Página não encontrada.</div>"), status=404)
-            return
-        body = _render_page(_form_html(self._defaults()))
-        self._send_html(body)
+  def do_POST(self) -> None:  # noqa: N802
+    if self._require_auth():
+      return
 
-    def do_POST(self) -> None:  # noqa: N802
-      if self._require_auth():
-        return
+    if self.path != "/analyze":
+      self._send_html(_render_page("<div class='card'>Rota inválida.</div>"), status=404)
+      return
 
-        if self.path != "/analyze":
-            self._send_html(_render_page("<div class='card'>Rota inválida.</div>"), status=404)
-            return
+    length = int(self.headers.get("Content-Length", "0"))
+    raw = self.rfile.read(length).decode("utf-8")
+    data = parse_qs(raw)
 
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length).decode("utf-8")
-        data = parse_qs(raw)
+    time_mode = _first(data, "time_mode", "all")
+    all_history = time_mode == "all"
+    lookback_months = int(_first(data, "lookback_months", "6") or "6")
+    lookback_days = int(_first(data, "lookback_days", "90") or "90")
 
-        time_mode = _first(data, "time_mode", "all")
-        all_history = time_mode == "all"
-        lookback_months = int(_first(data, "lookback_months", "6") or "6")
-        lookback_days = int(_first(data, "lookback_days", "90") or "90")
+    provider = _first(data, "llm_provider", "gemini")
+    model_default, base_default = _provider_defaults(provider)
+    env_defaults = self._defaults()
+    if env_defaults is None:
+      body = _render_page(_form_html(None, message="Configuração inválida no .env para Jira/LLM."))
+      self._send_html(body, status=400)
+      return
 
-        provider = _first(data, "llm_provider", "gemini")
-        model_default, base_default = _provider_defaults(provider)
+    try:
+      settings = RelationshipSettings(
+        jira_base_url=env_defaults.jira_base_url,
+        jira_user_email=env_defaults.jira_user_email,
+        jira_api_token=env_defaults.jira_api_token.get_secret_value(),
+        jira_project_key=env_defaults.jira_project_key,
+        llm_provider=provider,
+        llm_api_key=_first(data, "llm_api_key"),
+        llm_model=_first(data, "llm_model", model_default),
+        llm_base_url=_first(data, "llm_base_url", base_default),
+        all_history=all_history,
+        lookback_days=lookback_days if not all_history and time_mode == "days" else 0,
+        lookback_months=lookback_months if not all_history and time_mode == "months" else 0,
+        ticket_limit=int(_first(data, "ticket_limit", "40") or "40"),
+      )
+    except ValidationError as exc:
+      body = _render_page(_form_html(self._defaults(), message=f"Configuração inválida: {exc}"))
+      self._send_html(body, status=400)
+      return
 
-        try:
-            settings = RelationshipSettings(
-                jira_base_url=_first(data, "jira_base_url"),
-                jira_user_email=_first(data, "jira_user_email"),
-                jira_api_token=_first(data, "jira_api_token"),
-                jira_project_key=_first(data, "jira_project_key"),
-                llm_provider=provider,
-                llm_api_key=_first(data, "llm_api_key"),
-                llm_model=_first(data, "llm_model", model_default),
-                llm_base_url=_first(data, "llm_base_url", base_default),
-                all_history=all_history,
-                lookback_days=lookback_days if not all_history and time_mode == "days" else 0,
-                lookback_months=lookback_months if not all_history and time_mode == "months" else 0,
-                ticket_limit=int(_first(data, "ticket_limit", "40") or "40"),
-            )
-        except ValidationError as exc:
-            body = _render_page(_form_html(self._defaults(), message=f"Configuração inválida: {exc}"))
-            self._send_html(body, status=400)
-            return
+    customer_name = _first(data, "customer_name").strip()
+    if not customer_name:
+      body = _render_page(_form_html(self._defaults(), message="Informe o nome do cliente."))
+      self._send_html(body, status=400)
+      return
 
-        customer_name = _first(data, "customer_name").strip()
-        if not customer_name:
-            body = _render_page(_form_html(self._defaults(), message="Informe o nome do cliente."))
-            self._send_html(body, status=400)
-            return
-
-        try:
-            report = run_relationship_analysis(
-                settings,
-                customer_name=customer_name,
-                all_history=all_history,
-                lookback_days=settings.lookback_days,
-                lookback_months=settings.lookback_months,
-                ticket_limit=settings.ticket_limit,
-            )
-            body = _render_page(_result_html(report))
-            self._send_html(body, status=200)
-        except Exception as exc:  # noqa: BLE001
-            body = _render_page(_form_html(self._defaults(), message=f"Falha na análise: {exc}"))
-            self._send_html(body, status=500)
+    try:
+      report = run_relationship_analysis(
+        settings,
+        customer_name=customer_name,
+        all_history=all_history,
+        lookback_days=settings.lookback_days,
+        lookback_months=settings.lookback_months,
+        ticket_limit=settings.ticket_limit,
+      )
+      body = _render_page(_result_html(report))
+      self._send_html(body, status=200)
+    except Exception as exc:  # noqa: BLE001
+      body = _render_page(_form_html(self._defaults(), message=f"Falha na análise: {exc}"))
+      self._send_html(body, status=500)
 
 
 def main() -> None:
