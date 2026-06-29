@@ -3,7 +3,7 @@ import re
 from html import escape
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote, urlparse
 
 from pydantic import ValidationError
 
@@ -99,8 +99,12 @@ def _render_page(content: str) -> bytes:
     .row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }}
     .hint {{ font-size: .86rem; color: #5e6680; }}
     .btn {{ margin-top: 14px; background: #0b5fff; border: 0; color: #fff; padding: 10px 14px; border-radius: 10px; cursor: pointer; font-weight: 600; }}
+    .btn-link {{ display: inline-block; text-decoration: none; background: #0b5fff; color: #fff; padding: 10px 14px; border-radius: 10px; font-weight: 600; white-space: nowrap; }}
     .metrics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }}
     .metric {{ background: #f3f6ff; border: 1px solid #dbe4ff; border-radius: 10px; padding: 10px; }}
+    .result-head {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }}
+    .result-actions {{ display: flex; align-items: center; gap: 10px; }}
+    .result-actions strong {{ color: #27304a; font-size: .95rem; }}
     .health-good {{ background: #eaf8ef; border: 1px solid #9fddb6; color: #14532d; }}
     .health-mid {{ background: #fff7e6; border: 1px solid #f4cc7d; color: #7a4b07; }}
     .health-bad {{ background: #fdecec; border: 1px solid #f0a8a8; color: #7f1d1d; }}
@@ -108,7 +112,7 @@ def _render_page(content: str) -> bytes:
     .md h1, .md h2, .md h3 {{ margin: .6em 0 .4em; }}
     .md ul {{ margin: .3em 0 .8em 1.2em; padding: 0; }}
     .md p {{ margin: .45em 0; }}
-    @media (max-width: 760px) {{ .row, .metrics {{ grid-template-columns: 1fr; }} }}
+    @media (max-width: 760px) {{ .row, .metrics {{ grid-template-columns: 1fr; }} .result-head {{ flex-direction: column; align-items: stretch; }} }}
   </style>
 </head>
 <body>
@@ -207,10 +211,6 @@ def _form_html(defaults: RelationshipSettings | None, message: str = "") -> str:
         <label>Dias</label>
         <input name=\"lookback_days\" type=\"number\" min=\"1\" max=\"3650\" value=\"90\" />
       </div>
-      <div>
-        <label>Output dir</label>
-        <input name=\"output_dir\" value=\"{escape(str(defaults.output_dir if defaults else 'output/customer_relationship'))}\" />
-      </div>
     </div>
 
     <button class=\"btn\" type=\"submit\">Gerar healthcheck</button>
@@ -228,6 +228,12 @@ def _result_html(report) -> str:
 <div class=\"card\">
   <div class=\"brand\">Kizuma</div>
   <h1>Healthcheck concluído</h1>
+  <div class=\"result-head\">
+    <div class=\"result-actions\">
+      <strong>Download opcional:</strong>
+      <a class=\"btn-link\" href=\"/download?file={quote(str(report.output_markdown))}\">Baixar Markdown</a>
+    </div>
+  </div>
   <div class=\"metrics\">
     <div class=\"metric {health_class}\"><strong>Temperatura</strong><br/>{escape(report.temperature.level)}</div>
     <div class=\"metric\"><strong>Score</strong><br/>{report.temperature.score}</div>
@@ -248,6 +254,30 @@ def _result_html(report) -> str:
 
 
 class CustomerHealthHandler(BaseHTTPRequestHandler):
+    def _output_root(self) -> Path:
+        return Path("output/customer_relationship").resolve()
+
+    def _send_file(self, file_path: Path) -> None:
+        root = self._output_root()
+        target = file_path.resolve()
+        if root not in target.parents or not target.is_file():
+            self._send_html(_render_page("<div class='card'>Arquivo não encontrado.</div>"), status=404)
+            return
+
+        if target.suffix.lower() != ".md":
+            self._send_html(_render_page("<div class='card'>Apenas download de Markdown está disponível.</div>"), status=400)
+            return
+
+        content = target.read_bytes()
+        content_type = "text/markdown; charset=utf-8"
+
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f"attachment; filename={target.name}")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
     def _defaults(self) -> RelationshipSettings | None:
         try:
             return RelationshipSettings()
@@ -262,7 +292,17 @@ class CustomerHealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path != "/":
+        parsed = urlparse(self.path)
+        if parsed.path == "/download":
+            query = parse_qs(parsed.query)
+            raw_file = _first(query, "file").strip()
+            if not raw_file:
+                self._send_html(_render_page("<div class='card'>Parâmetro de download ausente.</div>"), status=400)
+                return
+            self._send_file(Path(raw_file))
+            return
+
+        if parsed.path != "/":
             self._send_html(_render_page("<div class='card'>Página não encontrada.</div>"), status=404)
             return
         body = _render_page(_form_html(self._defaults()))
@@ -299,7 +339,6 @@ class CustomerHealthHandler(BaseHTTPRequestHandler):
                 lookback_days=lookback_days if not all_history and time_mode == "days" else 0,
                 lookback_months=lookback_months if not all_history and time_mode == "months" else 0,
                 ticket_limit=int(_first(data, "ticket_limit", "40") or "40"),
-                output_dir=Path(_first(data, "output_dir", "output/customer_relationship")),
             )
         except ValidationError as exc:
             body = _render_page(_form_html(self._defaults(), message=f"Configuração inválida: {exc}"))

@@ -133,6 +133,7 @@ Na tela, a pessoa não técnica consegue:
 3. escolher janela temporal (histórico completo, meses ou dias);
 4. escolher limite de tickets;
 5. receber o diagnóstico final em texto amigável.
+6. baixar o relatório em `.md` ou `.json` por botão, de forma opcional no navegador.
 
 O resultado mostra semáforo visual por nível de saúde:
 
