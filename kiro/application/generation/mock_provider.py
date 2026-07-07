@@ -121,3 +121,24 @@ class MockLLMProvider(LLMProvider):
             ],
             tags=tags,
         )
+
+    def validate_proactive_signal(
+        self,
+        *,
+        candidate_type: str,
+        candidate_name: str,
+        heuristic_score: float,
+        rationale: str,
+        tickets_context: list[dict[str, str]],
+    ) -> dict[str, str]:
+        confidence = "alta" if heuristic_score >= 15 else "media"
+        decision = "confirma" if heuristic_score >= 10 else "parcial"
+        return {
+            "validation_decision": decision,
+            "confidence": confidence,
+            "status_summary": (
+                f"Validação simulada para {candidate_name} com {len(tickets_context)} chamados de contexto."
+            ),
+            "key_problems": rationale,
+            "recommended_action": "Priorizar revisão operacional do time de suporte para este sinal.",
+        }

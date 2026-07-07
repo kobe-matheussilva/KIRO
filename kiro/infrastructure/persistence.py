@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from kiro.application.proactive import ProactiveInsights, ProactiveLLMValidation
 from kiro.domain.models import ArticleDraft, Cluster, CustomerFAQ, PublishResult, Ticket
 from kiro.infrastructure.docx_exporter import article_to_docx, customer_faq_to_docx
 from kiro.utils.branding import MARKDOWN_FOOTER
@@ -165,6 +166,10 @@ class ArtifactStore:
         articles: Optional[list[tuple[Cluster, ArticleDraft]]] = None,
         tickets_collected: int = 0,
         clusters_detected: int = 0,
+        proactive_insights: Optional[ProactiveInsights] = None,
+        proactive_llm_validations: Optional[list[ProactiveLLMValidation]] = None,
+        proactive_card_key: Optional[str] = None,
+        proactive_card_url: Optional[str] = None,
     ) -> Path:
         """Gera report.md com resumo executivo da rodada."""
         articles = articles or []
@@ -209,6 +214,62 @@ class ArtifactStore:
                 )
                 if r.error:
                     lines.append(f"   - erro: `{r.error}`")
+            lines.append("")
+
+        if proactive_insights is not None:
+            lines += ["## Insights proativos", ""]
+            lines.append(
+                f"- Janela analisada: **{proactive_insights.period_days} dias**"
+            )
+            lines.append("")
+            lines.append("### Clientes potencialmente mais fragilizados")
+            if proactive_insights.fragile_customers:
+                for item in proactive_insights.fragile_customers:
+                    lines.append(
+                        f"- **{item.name}** (score={item.score}, tickets={item.tickets})"
+                    )
+            else:
+                lines.append("- Sem sinal suficiente no período.")
+
+            lines.append("")
+            lines.append("### Clientes com maior sinal de satisfação")
+            if proactive_insights.satisfied_customers:
+                for item in proactive_insights.satisfied_customers:
+                    lines.append(
+                        f"- **{item.name}** (score={item.score}, tickets={item.tickets})"
+                    )
+            else:
+                lines.append("- Sem sinal suficiente no período.")
+
+            lines.append("")
+            lines.append("### Funcionalidade com provável regressão")
+            if proactive_insights.problematic_feature is not None:
+                item = proactive_insights.problematic_feature
+                lines.append(
+                    f"- **{item.name}** (score={item.score}, tickets={item.tickets})"
+                )
+            else:
+                lines.append("- Sem sinal suficiente no período.")
+
+            if proactive_card_key or proactive_card_url:
+                lines.append("")
+                lines.append("### Card criado no Jira")
+                if proactive_card_key:
+                    lines.append(f"- Key: **{proactive_card_key}**")
+                if proactive_card_url:
+                    lines.append(f"- URL: `{proactive_card_url}`")
+
+            if proactive_llm_validations:
+                lines.append("")
+                lines.append("### Triangulação por IA")
+                for item in proactive_llm_validations:
+                    lines.append(
+                        f"- **{item.candidate_type} / {item.candidate_name}** "
+                        f"(decisão={item.validation_decision}, confiança={item.confidence})"
+                    )
+                    lines.append(f"  - status: {item.status_summary}")
+                    lines.append(f"  - problemas: {item.key_problems}")
+                    lines.append(f"  - ação: {item.recommended_action}")
             lines.append("")
 
         if not articles and not results:

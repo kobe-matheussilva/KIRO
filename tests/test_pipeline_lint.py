@@ -91,6 +91,23 @@ class _CannedLLM(LLMProvider):
             entries=[FAQEntry(question=f"q{i}", answer="r" * 30) for i in range(5)],
         )
 
+    def validate_proactive_signal(
+        self,
+        *,
+        candidate_type,
+        candidate_name,
+        heuristic_score,
+        rationale,
+        tickets_context,
+    ):
+        return {
+            "validation_decision": "parcial",
+            "confidence": "media",
+            "status_summary": "mock",
+            "key_problems": rationale,
+            "recommended_action": "mock",
+        }
+
 
 def _cluster(topic: str = "push") -> Cluster:
     return Cluster(

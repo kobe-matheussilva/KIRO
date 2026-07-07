@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     jira_api_token: SecretStr
     jira_project_key: str
     jira_extra_jql: Optional[str] = None
+    # Campo custom do Jira que representa a ficha do cliente (ex.: customfield_12345).
+    # Espera-se objeto com atributo `name`.
+    jira_customer_profile_field: Optional[str] = None
+    # Clientes a ignorar completamente na rodada (ex.: contas de teste/regressivo).
+    jira_excluded_customer_names: list[str] = Field(
+        default_factory=lambda: ["Larissa Ferreira"]
+    )
     jira_closed_statuses: list[str] = Field(
         default_factory=lambda: ["Done", "Closed", "Resolved"]
     )
@@ -108,6 +115,31 @@ class Settings(BaseSettings):
     lookback_days: int = Field(default=30, ge=1)
     enable_confluence_publish: bool = False
     enable_slack_notify: bool = False
+
+    # ─── Proactive insights (opcional) ─────────────────────────────
+    enable_proactive_insights: bool = False
+    # Cria card com os insights no Jira (painel Demandas Suporte)
+    enable_proactive_jira_card: bool = False
+    # Projeto de destino do card proativo (pode ser diferente do projeto fonte)
+    proactive_jira_project_key: Optional[str] = None
+    # Board alvo no Jira Agile para contexto/validação
+    proactive_jira_board_id: Optional[int] = Field(default=None, ge=1)
+    # Tipo da issue no Jira (Task, Story, etc.)
+    proactive_jira_issue_type: str = "Task"
+    # Opcional: ID do tipo da issue (tem precedência sobre o nome).
+    proactive_jira_issue_type_id: Optional[str] = None
+    # Campo/valor para preencher exigências do formulário de criação no Jira.
+    # Ex.: customfield_10566 (Cliente) com valor "Kobe".
+    proactive_jira_client_field_key: Optional[str] = None
+    proactive_jira_client_value: Optional[str] = None
+    # Campo select obrigatório adicional (ex.: Origem da Demanda).
+    proactive_jira_origin_field_key: Optional[str] = None
+    proactive_jira_origin_option_id: Optional[str] = None
+    proactive_top_n: int = Field(default=3, ge=1, le=10)
+    enable_proactive_llm_validation: bool = False
+    proactive_llm_top_candidates: int = Field(default=2, ge=1, le=10)
+    proactive_llm_top_tickets_per_candidate: int = Field(default=5, ge=1, le=20)
+
     output_dir: Path = Path("output")
     log_level: str = "INFO"
     dry_run: bool = False
@@ -130,6 +162,16 @@ class Settings(BaseSettings):
             )
         if self.enable_slack_notify and not self.slack_webhook_url:
             raise ValueError("ENABLE_SLACK_NOTIFY=true exige SLACK_WEBHOOK_URL.")
+        if self.enable_proactive_jira_card and not self.enable_proactive_insights:
+            self.enable_proactive_insights = True
+        if self.enable_proactive_jira_card and not self.proactive_jira_project_key:
+            raise ValueError(
+                "ENABLE_PROACTIVE_JIRA_CARD=true exige PROACTIVE_JIRA_PROJECT_KEY."
+            )
+        if self.enable_proactive_jira_card and not self.proactive_jira_board_id:
+            raise ValueError(
+                "ENABLE_PROACTIVE_JIRA_CARD=true exige PROACTIVE_JIRA_BOARD_ID."
+            )
         if self.dry_run:
             self.enable_confluence_publish = False
             self.enable_slack_notify = False

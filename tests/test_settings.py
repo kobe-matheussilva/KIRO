@@ -16,8 +16,17 @@ def test_loads_with_required_env(monkeypatch):
     _set_required(monkeypatch)
     s = Settings(_env_file=None)
     assert s.jira_project_key == "PROJ"
+    assert s.jira_customer_profile_field is None
+    assert "Larissa Ferreira" in s.jira_excluded_customer_names
     assert s.enable_confluence_publish is False
     assert s.lookback_days == 30
+
+
+def test_customer_profile_field_override(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("JIRA_CUSTOMER_PROFILE_FIELD", "customfield_12345")
+    s = Settings(_env_file=None)
+    assert s.jira_customer_profile_field == "customfield_12345"
 
 
 def test_missing_required_raises(monkeypatch):
@@ -176,3 +185,47 @@ def test_linter_rejects_invalid_block_mode(monkeypatch):
     monkeypatch.setenv("LINTER_BLOCK_MODE", "destroy-everything")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+# ─── Proactive insights ────────────────────────────────────────────
+
+
+def test_proactive_defaults_off(monkeypatch):
+    _set_required(monkeypatch)
+    s = Settings(_env_file=None)
+    assert s.enable_proactive_insights is False
+    assert s.enable_proactive_jira_card is False
+    assert s.proactive_jira_project_key is None
+    assert s.proactive_jira_board_id is None
+    assert s.proactive_jira_issue_type == "Task"
+    assert s.enable_proactive_llm_validation is False
+    assert s.proactive_llm_top_candidates == 2
+    assert s.proactive_llm_top_tickets_per_candidate == 5
+
+
+def test_proactive_card_requires_project_and_board(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("ENABLE_PROACTIVE_JIRA_CARD", "true")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_proactive_card_auto_enables_insights(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("ENABLE_PROACTIVE_JIRA_CARD", "true")
+    monkeypatch.setenv("PROACTIVE_JIRA_PROJECT_KEY", "SUP")
+    monkeypatch.setenv("PROACTIVE_JIRA_BOARD_ID", "123")
+    s = Settings(_env_file=None)
+    assert s.enable_proactive_jira_card is True
+    assert s.enable_proactive_insights is True
+
+
+def test_proactive_llm_validation_overrides(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("ENABLE_PROACTIVE_LLM_VALIDATION", "true")
+    monkeypatch.setenv("PROACTIVE_LLM_TOP_CANDIDATES", "4")
+    monkeypatch.setenv("PROACTIVE_LLM_TOP_TICKETS_PER_CANDIDATE", "6")
+    s = Settings(_env_file=None)
+    assert s.enable_proactive_llm_validation is True
+    assert s.proactive_llm_top_candidates == 4
+    assert s.proactive_llm_top_tickets_per_candidate == 6

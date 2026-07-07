@@ -44,3 +44,24 @@ class LLMProvider(ABC):
         Deve lançar LLMError/LLMResponseError em caso de falha.
         """
         ...
+
+    @abstractmethod
+    def validate_proactive_signal(
+        self,
+        *,
+        candidate_type: str,
+        candidate_name: str,
+        heuristic_score: float,
+        rationale: str,
+        tickets_context: list[dict[str, str]],
+    ) -> dict[str, str]:
+        """Triangula um sinal proativo com IA e retorna validação estruturada.
+
+        Retorno esperado:
+        - validation_decision: confirma | parcial | descarta
+        - confidence: baixa | media | alta
+        - status_summary: resumo executivo curto
+        - key_problems: principais problemas percebidos
+        - recommended_action: próxima ação recomendada
+        """
+        ...

@@ -58,6 +58,23 @@ class _CapturingLLM(LLMProvider):
             ],
         )
 
+    def validate_proactive_signal(
+        self,
+        *,
+        candidate_type: str,
+        candidate_name: str,
+        heuristic_score: float,
+        rationale: str,
+        tickets_context: list[dict[str, str]],
+    ) -> dict[str, str]:
+        return {
+            "validation_decision": "parcial",
+            "confidence": "media",
+            "status_summary": "mock",
+            "key_problems": rationale,
+            "recommended_action": "mock",
+        }
+
 
 def _chunk(idx: int = 0, page: str = "Page") -> GitBookChunk:
     return GitBookChunk(

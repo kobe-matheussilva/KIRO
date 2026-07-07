@@ -173,6 +173,7 @@ def _build_pipeline(
         api_token=settings.jira_api_token.get_secret_value(),
         timeout_seconds=settings.jira_timeout_seconds,
         page_size=settings.jira_page_size,
+        customer_profile_field=settings.jira_customer_profile_field,
     )
 
     clustering = HeuristicClusteringStrategy(
@@ -232,6 +233,7 @@ def _build_pipeline(
         closed_statuses=settings.jira_closed_statuses,
         lookback_days=settings.lookback_days,
         extra_jql=settings.jira_extra_jql,
+        excluded_customer_names=settings.jira_excluded_customer_names,
         llm_request_delay_seconds=settings.llm_request_delay_seconds,
         narrator=narrator,
         cluster_top_n=settings.cluster_top_n,
@@ -243,6 +245,20 @@ def _build_pipeline(
         dedupe_threshold=settings.confluence_dedupe_threshold,
         linter=linter,
         linter_block_mode=settings.linter_block_mode,
+        enable_proactive_insights=settings.enable_proactive_insights,
+        enable_proactive_jira_card=settings.enable_proactive_jira_card,
+        proactive_jira_project_key=settings.proactive_jira_project_key,
+        proactive_jira_board_id=settings.proactive_jira_board_id,
+        proactive_jira_issue_type=settings.proactive_jira_issue_type,
+        proactive_jira_issue_type_id=settings.proactive_jira_issue_type_id,
+        proactive_jira_client_field_key=settings.proactive_jira_client_field_key,
+        proactive_jira_client_value=settings.proactive_jira_client_value,
+        proactive_jira_origin_field_key=settings.proactive_jira_origin_field_key,
+        proactive_jira_origin_option_id=settings.proactive_jira_origin_option_id,
+        proactive_top_n=settings.proactive_top_n,
+        enable_proactive_llm_validation=settings.enable_proactive_llm_validation,
+        proactive_llm_top_candidates=settings.proactive_llm_top_candidates,
+        proactive_llm_top_tickets_per_candidate=settings.proactive_llm_top_tickets_per_candidate,
     )
 
 
