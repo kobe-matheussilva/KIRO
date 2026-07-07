@@ -17,10 +17,13 @@ _PROVIDER_DEFAULT_BASE_URL: dict[str, str] = {
     "anthropic": "https://api.anthropic.com/v1",
 }
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_ENV_FILE = _PROJECT_ROOT / ".env"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_DEFAULT_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -130,4 +133,36 @@ class Settings(BaseSettings):
         if self.dry_run:
             self.enable_confluence_publish = False
             self.enable_slack_notify = False
+        return self
+
+    @model_validator(mode="after")
+    def _validate_placeholder_credentials(self) -> "Settings":
+        def _looks_like_placeholder(value: str) -> bool:
+            lowered = value.strip().lower()
+            markers = (
+                "replace-with",
+                "your-company",
+                "example.com",
+                "replace/me/please",
+            )
+            return any(marker in lowered for marker in markers)
+
+        required_checks = {
+            "JIRA_BASE_URL": self.jira_base_url,
+            "JIRA_USER_EMAIL": self.jira_user_email,
+            "JIRA_PROJECT_KEY": self.jira_project_key,
+            "LLM_API_KEY": self.llm_api_key.get_secret_value(),
+        }
+
+        placeholders = [
+            key for key, value in required_checks.items() if _looks_like_placeholder(value)
+        ]
+
+        if placeholders:
+            joined = ", ".join(placeholders)
+            raise ValueError(
+                f"variáveis com valor de exemplo detectadas: {joined}. "
+                "Atualize o .env com credenciais reais antes de executar."
+            )
+
         return self

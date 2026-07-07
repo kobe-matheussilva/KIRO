@@ -1,0 +1,9 @@
+{
+  "include": ["**/*.py"],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": [".."]
+    }
+  ]
+}

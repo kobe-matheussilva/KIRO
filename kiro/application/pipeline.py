@@ -164,6 +164,12 @@ class Pipeline:
             self.narrator.done(
                 f"{len(result.tickets)} tickets coletados do projeto {self.project_key}"
             )
+            if not result.tickets:
+                self.narrator.warn(
+                    "nenhum ticket retornado. confira JIRA_PROJECT_KEY, "
+                    "JIRA_CLOSED_STATUSES, LOOKBACK_DAYS, JIRA_EXTRA_JQL "
+                    "e permissões da conta no projeto"
+                )
         except JiraError as e:
             self.narrator.fail(f"não consegui falar com o Jira: {e}")
             log.error("fetch falhou: %s", e)
