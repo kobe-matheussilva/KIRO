@@ -2,6 +2,7 @@
 
 import logging
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,13 @@ from kiro.application.clustering.base import ClusteringStrategy
 from kiro.application.generation.base import LLMProvider
 from kiro.application.lint import LinterResult, OutputLinter
 from kiro.application.lint_rules import Violation
+from kiro.application.proactive import (
+    ProactiveInsights,
+    ProactiveLLMValidation,
+    build_llm_candidates,
+    compute_proactive_insights,
+    format_proactive_card,
+)
 from kiro.application.retrieval import KnowledgeRetriever
 from kiro.application.style_reference import StyleReferenceFinder
 from kiro.domain.exceptions import (
@@ -19,6 +27,7 @@ from kiro.domain.exceptions import (
     KiroError,
     LinterBlocked,
     LLMError,
+    LLMResponseError,
     SlackError,
 )
 from kiro.domain.models import (
@@ -43,6 +52,12 @@ STAGES: tuple[str, ...] = ("fetch", "cluster", "generate", "publish", "notify")
 # Estilos disponíveis para os artigos gerados (escolhido por rodada).
 # Todos os estilos produzem conteúdo EXTERNO/cliente-facing.
 OUTPUT_STYLES: tuple[str, ...] = ("artigo", "faq")
+
+
+def _normalize_customer_name(value: str) -> str:
+    text = unicodedata.normalize("NFKD", value or "")
+    no_accents = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return " ".join(no_accents.lower().split())
 
 
 @dataclass(frozen=True)
@@ -73,6 +88,10 @@ class PipelineResult:
     # acumulados (issue #12). Block vai pra `errors`; warn vai pra cá.
     lint_warnings: list[tuple[Cluster, list[Violation]]] = field(default_factory=list)
     lint_blocks: list[tuple[Cluster, list[Violation]]] = field(default_factory=list)
+    proactive_insights: Optional[ProactiveInsights] = None
+    proactive_llm_validations: list[ProactiveLLMValidation] = field(default_factory=list)
+    proactive_card_key: Optional[str] = None
+    proactive_card_url: Optional[str] = None
 
 
 class Pipeline:
@@ -88,6 +107,7 @@ class Pipeline:
         closed_statuses: Optional[list[str]] = None,
         lookback_days: int = 30,
         extra_jql: Optional[str] = None,
+        excluded_customer_names: Optional[list[str]] = None,
         llm_request_delay_seconds: float = 0.0,
         narrator: Optional[Narrator] = None,
         cluster_top_n: int = 10,
@@ -99,6 +119,20 @@ class Pipeline:
         dedupe_threshold: float = 0.6,
         linter: Optional[OutputLinter] = None,
         linter_block_mode: str = "skip",
+        enable_proactive_insights: bool = False,
+        enable_proactive_jira_card: bool = False,
+        proactive_jira_project_key: Optional[str] = None,
+        proactive_jira_board_id: Optional[int] = None,
+        proactive_jira_issue_type: str = "Task",
+        proactive_jira_issue_type_id: Optional[str] = None,
+        proactive_jira_client_field_key: Optional[str] = None,
+        proactive_jira_client_value: Optional[str] = None,
+        proactive_jira_origin_field_key: Optional[str] = None,
+        proactive_jira_origin_option_id: Optional[str] = None,
+        proactive_top_n: int = 3,
+        enable_proactive_llm_validation: bool = False,
+        proactive_llm_top_candidates: int = 2,
+        proactive_llm_top_tickets_per_candidate: int = 5,
     ) -> None:
         self.jira = jira
         self.clustering = clustering
@@ -110,6 +144,11 @@ class Pipeline:
         self.closed_statuses = closed_statuses or ["Done", "Closed", "Resolved"]
         self.lookback_days = lookback_days
         self.extra_jql = extra_jql
+        self.excluded_customer_names = [
+            _normalize_customer_name(name)
+            for name in (excluded_customer_names or [])
+            if (name or "").strip()
+        ]
         self.llm_request_delay_seconds = max(0.0, llm_request_delay_seconds)
         self.narrator = narrator or Narrator(enabled=False)
         self.cluster_top_n = cluster_top_n
@@ -121,6 +160,20 @@ class Pipeline:
         self.dedupe_threshold = dedupe_threshold
         self.linter = linter
         self.linter_block_mode = linter_block_mode
+        self.enable_proactive_insights = enable_proactive_insights
+        self.enable_proactive_jira_card = enable_proactive_jira_card
+        self.proactive_jira_project_key = proactive_jira_project_key
+        self.proactive_jira_board_id = proactive_jira_board_id
+        self.proactive_jira_issue_type = proactive_jira_issue_type
+        self.proactive_jira_issue_type_id = proactive_jira_issue_type_id
+        self.proactive_jira_client_field_key = proactive_jira_client_field_key
+        self.proactive_jira_client_value = proactive_jira_client_value
+        self.proactive_jira_origin_field_key = proactive_jira_origin_field_key
+        self.proactive_jira_origin_option_id = proactive_jira_origin_option_id
+        self.proactive_top_n = proactive_top_n
+        self.enable_proactive_llm_validation = enable_proactive_llm_validation
+        self.proactive_llm_top_candidates = proactive_llm_top_candidates
+        self.proactive_llm_top_tickets_per_candidate = proactive_llm_top_tickets_per_candidate
 
     def run(self, request: PipelineRequest) -> PipelineResult:
         started = datetime.now(timezone.utc)
@@ -146,6 +199,9 @@ class Pipeline:
         if "notify" in stages:
             self._stage_notify(result, request)
 
+        if self.enable_proactive_insights and result.tickets:
+            self._stage_proactive(result, request)
+
         return self._finalize(result, started)
 
     # ───────────────────────── stages ─────────────────────────
@@ -161,6 +217,7 @@ class Pipeline:
                     lookback_days=self.lookback_days,
                     extra_jql=self.extra_jql,
                 )
+                result.tickets = self._filter_excluded_customers(result.tickets)
             self.narrator.done(
                 f"{len(result.tickets)} tickets coletados do projeto {self.project_key}"
             )
@@ -169,6 +226,31 @@ class Pipeline:
             log.error("fetch falhou: %s", e)
             result.errors.append({"stage": "fetch", "error": str(e)})
         self.store.save_tickets(result.tickets)
+
+    def _filter_excluded_customers(self, tickets: list[Ticket]) -> list[Ticket]:
+        if not self.excluded_customer_names:
+            return tickets
+
+        filtered: list[Ticket] = []
+        ignored = 0
+        excluded = set(self.excluded_customer_names)
+
+        for ticket in tickets:
+            customer_name = _normalize_customer_name(ticket.customer_name or "")
+            reporter_name = _normalize_customer_name(ticket.reporter_name or "")
+            if (customer_name and customer_name in excluded) or (
+                reporter_name and reporter_name in excluded
+            ):
+                ignored += 1
+                continue
+            filtered.append(ticket)
+
+        if ignored:
+            log.info(
+                "fetch: %d ticket(s) ignorados por cliente excluído",
+                ignored,
+            )
+        return filtered
 
     def _stage_cluster(self, result: PipelineResult) -> None:
         with self.narrator.step(
@@ -294,6 +376,94 @@ class Pipeline:
             self.narrator.fail(f"Slack falhou: {e}")
             log.error("slack falhou: %s", e)
             result.errors.append({"stage": "notify", "error": str(e)})
+
+    def _stage_proactive(self, result: PipelineResult, request: PipelineRequest) -> None:
+        with self.narrator.step("gerando insights proativos da rodada..."):
+            insights = compute_proactive_insights(
+                result.tickets,
+                period_days=self.lookback_days,
+                top_n=self.proactive_top_n,
+            )
+            result.proactive_insights = insights
+        self.narrator.done("insights proativos prontos")
+
+        if self.enable_proactive_llm_validation and not request.dry_run:
+            with self.narrator.step("triangulando sinais proativos com IA..."):
+                candidates = build_llm_candidates(
+                    insights,
+                    result.tickets,
+                    top_candidates=self.proactive_llm_top_candidates,
+                    top_tickets_per_candidate=self.proactive_llm_top_tickets_per_candidate,
+                )
+                for item in candidates:
+                    try:
+                        parsed = self.llm.validate_proactive_signal(
+                            candidate_type=item.candidate_type,
+                            candidate_name=item.candidate_name,
+                            heuristic_score=item.heuristic_score,
+                            rationale=item.rationale,
+                            tickets_context=item.tickets_context,
+                        )
+                        result.proactive_llm_validations.append(
+                            ProactiveLLMValidation(
+                                candidate_type=item.candidate_type,
+                                candidate_name=item.candidate_name,
+                                validation_decision=parsed["validation_decision"],
+                                confidence=parsed["confidence"],
+                                status_summary=parsed["status_summary"],
+                                key_problems=parsed["key_problems"],
+                                recommended_action=parsed["recommended_action"],
+                            )
+                        )
+                    except (LLMError, LLMResponseError) as e:
+                        log.warning(
+                            "validação proativa LLM falhou para %s/%s: %s",
+                            item.candidate_type,
+                            item.candidate_name,
+                            e,
+                        )
+            self.narrator.done("triangulação por IA concluída")
+
+        if (
+            not self.enable_proactive_jira_card
+            or request.dry_run
+            or not self.proactive_jira_project_key
+            or not self.proactive_jira_board_id
+        ):
+            return
+
+        try:
+            board_name = self.jira.get_board_name(self.proactive_jira_board_id)
+            summary, description = format_proactive_card(
+                insights,
+                source_project_key=self.project_key,
+                board_name=board_name,
+                llm_validations=result.proactive_llm_validations,
+            )
+            extra_fields: dict[str, object] = {}
+            if self.proactive_jira_client_field_key and self.proactive_jira_client_value:
+                extra_fields[self.proactive_jira_client_field_key] = [
+                    self.proactive_jira_client_value
+                ]
+            if self.proactive_jira_origin_field_key and self.proactive_jira_origin_option_id:
+                extra_fields[self.proactive_jira_origin_field_key] = {
+                    "id": self.proactive_jira_origin_option_id
+                }
+            key, url = self.jira.create_issue(
+                project_key=self.proactive_jira_project_key,
+                issue_type=self.proactive_jira_issue_type,
+                issue_type_id=self.proactive_jira_issue_type_id,
+                summary=summary,
+                description=description,
+                labels=["kiro-proativo", "demandas-suporte"],
+                extra_fields=extra_fields or None,
+            )
+            result.proactive_card_key = key
+            result.proactive_card_url = url
+            self.narrator.done(f"card proativo criado no Jira: {key}")
+        except JiraError as e:
+            self.narrator.fail(f"falha ao criar card proativo no Jira: {e}")
+            result.errors.append({"stage": "proactive", "error": str(e)})
 
     # ────────────────────── helpers ───────────────────────────
 
@@ -494,5 +664,9 @@ class Pipeline:
             articles=result.articles,
             tickets_collected=len(result.tickets),
             clusters_detected=len(result.clusters),
+            proactive_insights=result.proactive_insights,
+            proactive_llm_validations=result.proactive_llm_validations,
+            proactive_card_key=result.proactive_card_key,
+            proactive_card_url=result.proactive_card_url,
         )
         return result

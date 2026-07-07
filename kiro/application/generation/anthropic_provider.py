@@ -74,6 +74,27 @@ class AnthropicProvider(LLMProvider):
         raw = self._safe_call(prompt)
         return self._parse_customer_faq_response(raw)
 
+    def validate_proactive_signal(
+        self,
+        *,
+        candidate_type: str,
+        candidate_name: str,
+        heuristic_score: float,
+        rationale: str,
+        tickets_context: list[dict[str, str]],
+    ) -> dict[str, str]:
+        from kiro.application.generation.gemini_provider import GeminiProvider
+
+        prompt = GeminiProvider._build_proactive_validation_prompt(
+            candidate_type=candidate_type,
+            candidate_name=candidate_name,
+            heuristic_score=heuristic_score,
+            rationale=rationale,
+            tickets_context=tickets_context,
+        )
+        raw = self._safe_call(prompt)
+        return GeminiProvider._parse_proactive_validation_response(raw)
+
     def _safe_call(self, prompt: str) -> str:
         try:
             return self._call_api(prompt)

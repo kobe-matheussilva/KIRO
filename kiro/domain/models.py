@@ -17,6 +17,8 @@ class Ticket(BaseModel):
     components: list[str] = Field(default_factory=list)
     status: Optional[str] = None
     resolved_at: Optional[datetime] = None
+    customer_name: Optional[str] = None
+    reporter_name: Optional[str] = None
 
     @property
     def text(self) -> str:

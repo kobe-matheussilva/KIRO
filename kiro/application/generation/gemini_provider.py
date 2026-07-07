@@ -75,6 +75,25 @@ class GeminiProvider(LLMProvider):
         raw = self._safe_call(prompt)
         return self._parse_customer_faq_response(raw)
 
+    def validate_proactive_signal(
+        self,
+        *,
+        candidate_type: str,
+        candidate_name: str,
+        heuristic_score: float,
+        rationale: str,
+        tickets_context: list[dict[str, str]],
+    ) -> dict[str, str]:
+        prompt = self._build_proactive_validation_prompt(
+            candidate_type=candidate_type,
+            candidate_name=candidate_name,
+            heuristic_score=heuristic_score,
+            rationale=rationale,
+            tickets_context=tickets_context,
+        )
+        raw = self._safe_call(prompt)
+        return self._parse_proactive_validation_response(raw)
+
     def _safe_call(self, prompt: str) -> str:
         """Wrapper que converte HTTPError pós-retry em LLMError tipado."""
         try:
@@ -401,3 +420,61 @@ Responda APENAS com JSON válido, sem texto adicional:
             raise LLMResponseError(
                 f"JSON do Gemini não satisfaz o schema CustomerFAQ: {e}"
             ) from e
+
+    @staticmethod
+    def _build_proactive_validation_prompt(
+        *,
+        candidate_type: str,
+        candidate_name: str,
+        heuristic_score: float,
+        rationale: str,
+        tickets_context: list[dict[str, str]],
+    ) -> str:
+        payload = {
+            "candidate_type": candidate_type,
+            "candidate_name": candidate_name,
+            "heuristic_score": heuristic_score,
+            "heuristic_rationale": rationale,
+            "tickets": tickets_context,
+        }
+        return (
+            "Voce e um analista senior de suporte e sucesso do cliente. "
+            "Triangule o sinal heuristico usando os chamados fornecidos.\n\n"
+            "Regras:\n"
+            "1) Seja objetivo e nao use linguagem especulativa excessiva.\n"
+            "2) Nao invente dados fora dos chamados.\n"
+            "3) Se a evidencia for fraca, retorne decisao 'descarta' ou 'parcial'.\n"
+            "4) Foque em impacto operacional e proxima acao concreta.\n\n"
+            "Retorne APENAS JSON valido com as chaves:\n"
+            "- validation_decision: confirma|parcial|descarta\n"
+            "- confidence: baixa|media|alta\n"
+            "- status_summary: string curta (1-2 frases)\n"
+            "- key_problems: string curta\n"
+            "- recommended_action: string curta e acionavel\n\n"
+            f"Dados:\n{json.dumps(payload, ensure_ascii=False)}"
+        )
+
+    @staticmethod
+    def _parse_proactive_validation_response(raw: str) -> dict[str, str]:
+        cleaned = _FENCE_RE.sub("", raw).strip()
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            raise LLMResponseError(f"resposta de validação proativa não é JSON: {e}") from e
+
+        required = (
+            "validation_decision",
+            "confidence",
+            "status_summary",
+            "key_problems",
+            "recommended_action",
+        )
+        out: dict[str, str] = {}
+        for key in required:
+            value = str(data.get(key, "")).strip()
+            if not value:
+                raise LLMResponseError(
+                    f"resposta de validação proativa sem campo obrigatório: {key}"
+                )
+            out[key] = value
+        return out
